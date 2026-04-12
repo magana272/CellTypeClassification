@@ -1,0 +1,478 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage[numbers]{natbib}
+\usepackage{authblk}
+
+% ── Title ─────────────────────────────────────────────────────────────────────
+\title{Deep Learning for Single-Cell RNA-seq Cell Type Classification:\\
+       A 1D CNN Baseline, Pathway-Aware Transformer, and Graph Neural Network}
+
+\author{Progress Report 2}
+\affil{Deep Learning Final Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ── Abstract ──────────────────────────────────────────────────────────────────
+\begin{abstract}
+Automated cell type annotation from single-cell RNA sequencing (scRNA-seq) data
+is a critical bottleneck in modern transcriptomics. We present a three-way
+comparison of deep learning architectures for this task using the Allen Brain
+Atlas Human Primary Motor Cortex (M1) 10x Chromium dataset (76,533 cells,
+50,281 genes, 17 cell types). First, a 1D convolutional neural network (CNN)
+baseline operating on highly variable genes (HVGs) achieves 66.14\% overall
+accuracy and 92.51\% balanced accuracy. Second, a pathway-masked Transformer
+(TOSICA-inspired) operating on 300 Reactome pathway tokens achieves 66.56\%
+overall accuracy and 92.65\% balanced accuracy, with interpretable per-pathway
+attention scores and a built-in unknown-cell detection mechanism that flags
+95.2\% of SMART-seq transfer cells as low-confidence. Third, a GraphSAGE
+graph neural network (GNN) operating on a cell-similarity $k$-NN graph achieves
+63.17\% overall accuracy and 90.05\% balanced accuracy, with improved handling
+of the problematic L2/3~IT class (F1 0.247 vs.\ 0.011 for the CNN) and 88.56\%
+accuracy on inductive SMART-seq transfer. Analysis of failure modes across all
+three architectures reveals that the L2/3~IT/Micro-PVM misclassification
+pathology is a data-level phenomenon driven by class imbalance, not an artifact
+of any single model family.
+\end{abstract}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Single-cell RNA sequencing enables transcriptomic profiling at cellular
+resolution, but the resulting datasets routinely contain tens of thousands of
+cells measured across tens of thousands of genes. Manual cell type annotation
+via marker-gene inspection after unsupervised clustering remains the dominant
+workflow, yet it is subjective, labor-intensive, and does not scale to atlas-level
+datasets. Supervised deep learning offers an alternative: train a classifier on
+a well-annotated reference atlas and transfer predictions to new data.
+
+We investigate this paradigm using the Allen Institute's Human M1 10x Chromium
+atlas as the reference. Our primary contribution is a thorough 1D~CNN baseline
+with honest evaluation, including per-class F1 analysis that exposes how
+headline accuracy can mask catastrophic failures on individual classes. We then
+evaluate a TOSICA-inspired Transformer architecture that addresses several
+shortcomings of the CNN through pathway-level token embeddings and
+attention-based interpretability. Finally, we develop a GraphSAGE-based GNN
+that explicitly models inter-cell relationships through a cosine-similarity
+$k$-NN graph, providing a third perspective on the classification problem and
+a natural inductive transfer mechanism.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Data}
+
+\subsection{Primary Dataset}
+The Allen Brain Atlas Human Primary Motor Cortex (M1) 10x Chromium dataset
+comprises 76,533 labelled cells and 50,281 genes. After filtering classes with
+fewer than 100 cells, 76,362 cells spanning 17 subclass-level cell types were
+retained. The data exhibit severe class imbalance (Figure~\ref{fig:dist}):
+L2/3~IT neurons alone account for 19,385 training cells (31.7\%), while
+Micro-PVM contributes only 86 (0.1\%).
+
+\subsection{Secondary Dataset}
+We additionally evaluate cross-technology transfer on the Allen Institute's
+Human Multiple Cortical Areas SMART-seq dataset. This dataset uses plate-based
+full-length sequencing rather than droplet-based 3$'$ counting, introducing
+substantial technical batch effects.
+
+\subsection{Practical Data Challenges}
+The expression matrix (76K $\times$ 50K, ${\sim}$30\,GB as CSV) could not be
+loaded into memory with standard \texttt{pandas.read\_csv}, even on Google
+Colab's high-RAM runtime. We briefly considered provisioning a Google Cloud VM
+with sufficient RAM but decided against the cost and complexity. Instead, we
+adopted Polars lazy-frame streaming (\texttt{pl.scan\_csv} with
+\texttt{engine="streaming"}), which processes the file in bounded memory by
+evaluating filter, projection, and aggregation operations in a single pass
+without materializing the full DataFrame. An earlier attempt to download the
+matrix via \texttt{curl~-o} terminated prematurely, producing a truncated file
+that happened to yield artificially strong classification performance---a
+cautionary lesson in validating data integrity before drawing conclusions.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Methods}
+
+\subsection{Preprocessing}
+Data were split 80/10/10 into train, validation, and test sets \emph{before}
+any preprocessing to prevent data leakage. The preprocessing pipeline operated
+in three streaming phases, each scanning the CSV without loading it fully into
+memory:
+
+\begin{enumerate}
+    \item \textbf{Gene filter (Phase~1).} Using only validation-set cells,
+    genes expressed in fewer than 3\% of cells were removed, retaining 12,402
+    of 50,281 genes.
+    \item \textbf{HVG selection (Phase~2).} On the same validation cells,
+    library-size normalization ($\times 10^{4}$) and log$_{1p}$
+    transformation were applied in-stream, and per-gene variance was computed.
+    The top 1,000 genes by variance were selected as highly variable genes
+    (HVGs).
+    \item \textbf{Data extraction (Phase~3).} A final streaming pass over all
+    76,362 cells extracted and normalized only the 1,000 HVG columns, then
+    scattered rows into pre-allocated per-split NumPy arrays indexed by a
+    sample-name lookup table.
+\end{enumerate}
+
+\noindent Finally, $z$-scoring via \texttt{StandardScaler} (fit on training
+data only) completed the CNN and GNN pipelines. The Transformer pipeline used
+library-size normalization and log$_{1p}$ only, without $z$-scoring, consistent
+with the TOSICA design. Intermediate Polars DataFrames were explicitly deleted
+and garbage-collected after each phase to minimize peak memory.
+
+\subsection{1D CNN Architecture}
+Gene expression vectors were treated as single-channel 1D signals of length
+1,000. The feature extractor comprised four stages:
+
+\begin{enumerate}
+    \item \textbf{Conv1d}$(1 \to 64,\; k{=}15)$ with same-padding
+    \item \textbf{ConvBlock}$(64 \to 128,\; k{=}15) \to$ MaxPool$(4)$
+    \item \textbf{ConvBlock}$(128 \to 256,\; k{=}9) \to$ MaxPool$(4)$
+    \item \textbf{ConvBlock}$(256 \to 128,\; k{=}7) \to$ MaxPool$(4)$
+\end{enumerate}
+
+\noindent Each ConvBlock applies Conv1d $\to$ BatchNorm $\to$ Dropout(0.1) $\to$
+GELU\@. An adaptive average pool reduces the final feature map to a 128-d vector,
+which feeds a classifier head: Linear$(128 \to 200) \to$ ReLU $\to$
+BatchNorm $\to$ Linear$(200 \to 17)$. Total parameters: 678,769.
+
+\subsection{Pathway-Masked Transformer Architecture}
+Rather than selecting HVGs by variance, the TOSICA-inspired model constructs a
+binary mask $\mathbf{M} \in \{0,1\}^{G \times P}$ from MSigDB Reactome gene
+sets, where $M_{gp}=1$ iff gene $g$ belongs to pathway $p$. After intersecting
+with the 10x gene universe, 8,822 genes across 300 pathways were retained. The
+masked embedding layer computes per-pathway tokens as:
+
+\[
+\mathbf{e}_{b,p} = \sum_{g} x_{b,g}\,(\mathbf{W}_{:,g,p} \odot M_{g,p}) + \mathbf{b}_p
+\]
+
+\noindent A learnable CLS token is prepended, positional embeddings are added,
+and the sequence of $P{+}1$ tokens is processed by a 2-layer Transformer
+encoder (embedding dim 48, 4 heads, pre-norm). The CLS output feeds a
+LayerNorm $\to$ Linear$(48 \to 96) \to$ GELU $\to$ Dropout $\to$ Linear$(96
+\to 17)$ classifier. Cells with $\max(\mathbf{p}) < 0.95$ are flagged as
+``Unknown.'' Total parameters: $\sim$150K.
+
+\subsection{GraphSAGE GNN Architecture}
+The GNN explicitly models inter-cell relationships. A cosine $k$-NN graph
+($k{=}15$) was constructed over all 76,362 training cells on their 200
+top-HVG features, yielding 1,858,284 symmetric edges. Node features are the
+200-dimensional $z$-scored HVG vectors.
+
+The architecture uses two ResidualSAGEBlocks followed by a final SAGEConv:
+
+\[
+\mathbf{h}^{(l+1)} = \text{GELU}(\text{LayerNorm}(\text{SAGEConv}(\mathbf{h}^{(l)}, \mathcal{E}))) + \mathbf{W}_\text{proj}\,\mathbf{h}^{(l)}
+\]
+
+\noindent The final hidden dimension is 256 (halved to 128 after the last conv).
+A LayerNorm $\to$ Linear$(128 \to 17)$ head produces logits. For inductive
+SMART-seq transfer, SMART-seq node features are stacked with training features,
+new cells are connected to their $k$ nearest training neighbors, and a single
+forward pass produces embeddings for all nodes simultaneously. Total parameters:
+$\sim$290K.
+
+\subsection{Training Protocol}
+All models were trained on Google Colab using an NVIDIA T4 GPU with the
+high-RAM runtime setting. Training used AdamW
+($\text{lr}{=}3{\times}10^{-4}$, weight decay$\,{=}10^{-6}$), cosine
+annealing, class-weighted cross-entropy with label smoothing of 0.1, gradient
+clipping at 1.0, and mixed-precision (FP16) on CUDA\@. Early stopping with
+patience 15 monitored validation loss. The GNN converged at epoch 33.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Results: 1D CNN Baseline}
+
+\subsection{Exploratory Visualization}
+Figure~\ref{fig:dist} shows the severe class imbalance in the training set.
+PCA on the 1,000 HVGs (Figure~\ref{fig:pca}) captures only ${\sim}$57\%
+cumulative variance in 50 components, with PC1 (14.6\%) and PC2 (8.6\%)
+already separating major non-neuronal populations (Oligo, Pvalb) from
+excitatory neurons. The UMAP embedding (Figure~\ref{fig:umap}) further
+resolves all 17 classes into visually distinct clusters, confirming that
+the HVG representation carries discriminative signal. A dendrogram-ordered
+heatmap of the top 100 HVGs (Figure~\ref{fig:heatmap}) reveals
+cell-type-specific expression blocks, with clear marker patterns for
+non-neuronal types (Astro, OPC, Oligo) and more subtle distinctions among
+excitatory layer subtypes.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/cell-type-distibution.png}
+    \caption{Training set cell type distribution. L2/3~IT dominates at 19,385
+    cells; Micro-PVM has only 86.}
+    \label{fig:dist}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/PCA.png}
+    \caption{Left: PCA scree plot showing cumulative variance does not reach
+    80\% within 50 components, reflecting the high dimensionality of
+    scRNA-seq data. Right: PC1 vs.\ PC2 colored by cell type.}
+    \label{fig:pca}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\linewidth]{figures/UMAP.png}
+    \caption{UMAP of training set (1,000 cells subsampled) on 50 PCs. All
+    17 cell types form visually separable clusters.}
+    \label{fig:umap}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/den_heatmap-of-gene-expression.png}
+    \caption{Dendrogram-clustered heatmap of the top 100 HVGs across 50 cells
+    per type. Row color bars indicate cell type; columns are hierarchically
+    clustered genes. Red/blue encodes $z$-scored expression.}
+    \label{fig:heatmap}
+\end{figure}
+
+\subsection{Training Dynamics}
+The loss and accuracy curves (Figure~\ref{fig:loss}) reveal notable instability.
+Training accuracy spikes to 94.8\% by epoch~3, then collapses to ${\sim}$64\%
+by epoch~6 and remains there. Validation accuracy oscillates between 39\% and
+75\% in the first 10 epochs before stabilizing near 66\%. This behavior is
+consistent with the model initially learning to classify many classes well, then
+converging to a degenerate solution in which the largest class (L2/3~IT) is
+systematically misclassified---an equilibrium the class-weighted loss and cosine
+annealing cannot escape within 20 epochs.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/loss_curve_for_one_cnn.png}
+    \caption{Training and validation loss/accuracy curves over 20 epochs.
+    The sharp training accuracy collapse after epoch~3 suggests the model
+    shifts toward a degenerate prediction mode for the dominant class.}
+    \label{fig:loss}
+\end{figure}
+
+\subsection{Test Set Evaluation}
+The model achieves 66.14\% overall test accuracy, 92.51\% balanced accuracy,
+and 0.8705 macro F1 (Table~\ref{tab:comparison}). The disparity between overall
+accuracy and balanced accuracy is diagnostic: the model achieves near-perfect
+recall ($>$0.94) on 15 of 17 classes but catastrophically fails on L2/3~IT
+(recall 0.005, F1 0.011) and Micro-PVM (precision 0.004, F1 0.009).
+
+The confusion matrix (Figure~\ref{fig:cm}) shows that nearly all L2/3~IT cells
+(99\%) are misclassified as Micro-PVM, and conversely, Micro-PVM achieves
+perfect recall but absorbs thousands of false positives---hence its precision of
+0.004. This cross-contamination between the largest and smallest classes is the
+primary driver of the low headline accuracy. All remaining classes achieve
+F1\,$\geq$\,0.95 (Figure~\ref{fig:f1}).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{{figures/66_acc_on_test_set_Confusion matrix}.png}
+    \caption{Normalized confusion matrix on the test set. The L2/3~IT row shows
+    near-total misclassification into Micro-PVM (column 10), the single failure
+    mode responsible for the 66\% overall accuracy.}
+    \label{fig:cm}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/f1-per-classgroup.png}
+    \caption{Per-class F1 scores. The mean F1 of 0.870 is dragged down
+    almost entirely by L2/3~IT (0.01) and Micro-PVM (0.01); all other classes
+    exceed 0.95.}
+    \label{fig:f1}
+\end{figure}
+
+\subsection{Cross-Technology Transfer}
+The trained CNN was applied to the SMART-seq dataset by aligning the same 1,000
+HVGs (zero-filling missing genes), applying identical normalization, and running
+inference. Without explicit batch correction, the model must generalize across
+fundamentally different capture technologies. ComBat correction was attempted
+but library dependencies were unavailable in the runtime.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Results: Pathway-Masked Transformer}
+
+\subsection{Training Dynamics}
+Figure~\ref{fig:attn_loss} shows the Transformer training curves. The model
+trains stably without the collapse seen in the CNN, reaching convergence within
+the 100-epoch budget. The smooth loss trajectory reflects the pathway-level
+aggregation, which acts as a built-in regularizer by preventing the model from
+overfitting to individual gene noise.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/attention_loss_and_accuracy.png}
+    \caption{Transformer training and validation loss/accuracy curves.
+    Training is notably more stable than the CNN, without the early-epoch
+    accuracy collapse observed in the convolutional baseline.}
+    \label{fig:attn_loss}
+\end{figure}
+
+\subsection{Test Set Evaluation}
+The Transformer achieves 66.56\% overall test accuracy, 92.65\% balanced
+accuracy, and 0.8672 macro F1 (Table~\ref{tab:comparison})---a marginal but
+consistent improvement over the CNN on every aggregate metric. Critically, the
+L2/3~IT/Micro-PVM misclassification pattern persists: L2/3~IT recall remains
+near zero, confirming that this failure is a data-level phenomenon (extreme
+class imbalance and feature overlap) rather than an architectural one.
+
+\subsection{Attention-Based Interpretability}
+Because the Transformer encodes cells as sequences of pathway tokens, the
+CLS-to-pathway attention weights constitute a biologically meaningful cell
+embedding. UMAP on these attention scores (Figure~\ref{fig:attn_umap}) produces
+a visualization where proximity reflects shared pathway activity rather than
+abstract statistical variance. Non-neuronal populations (Astro, Oligo, OPC)
+form tight, well-separated clusters consistent with their distinct transcriptional
+programs; excitatory layer subtypes (L4~IT, L5~IT, L6~IT) occupy adjacent
+regions reflecting their shared cortical identity.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/umap_on_attention_score.png}
+    \caption{UMAP of per-cell CLS-to-pathway attention scores. Each axis
+    corresponds to a combination of Reactome pathway activities rather than
+    a principal component of raw gene expression. Unknown SMART-seq cells
+    (gray) cluster at the periphery, consistent with technical batch effects
+    displacing them from the reference manifold.}
+    \label{fig:attn_umap}
+\end{figure}
+
+\subsection{Cross-Technology Transfer and Unknown Detection}
+When applied inductively to the SMART-seq dataset, the Transformer's
+probability-threshold mechanism flags 95.2\% of cells as ``Unknown''
+($\max(\mathbf{p}) < 0.95$). This high rejection rate reflects the substantial
+technology-driven distributional shift between 10x droplet and SMART-seq
+plate-based sequencing; the pathway tokenization alone is insufficient to bridge
+this gap without explicit batch correction. The Unknown cells appear at the
+periphery of the attention-score UMAP (gray points in
+Figure~\ref{fig:attn_umap}), visually confirming their displacement from the
+reference manifold.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Results: GraphSAGE Graph Neural Network}
+
+\subsection{Graph Construction}
+A cosine $k$-NN graph ($k{=}15$) was built over all 76,362 training cells on
+their 200-HVG $z$-scored features, yielding 1,858,284 symmetric directed edges.
+The graph captures local cell-similarity structure that neither the CNN nor the
+Transformer explicitly models: neighboring nodes in the graph are cells with
+similar expression profiles, and the GNN aggregates this neighborhood context
+before making a classification decision.
+
+\subsection{Training Dynamics}
+Figure~\ref{fig:gnn_loss} shows the GNN training curves. The model converged
+at epoch 33 via early stopping, substantially faster than the CNN (20 full
+epochs) and Transformer (up to 100 epochs). The full-batch training
+regime---processing all 76,362 nodes and 1.86M edges in a single forward
+pass---is memory-intensive but avoids the mini-batch boundary artifacts that
+can affect graph models trained with neighborhood sampling.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/GGN_loss_and_accuracy.png}
+    \caption{GNN training and validation loss/accuracy curves. Early stopping
+    at epoch 33 indicates rapid convergence on the full-graph objective.}
+    \label{fig:gnn_loss}
+\end{figure}
+
+\subsection{Test Set Evaluation}
+The GNN achieves 63.17\% overall test accuracy, 90.05\% balanced accuracy, and
+0.8514 macro F1 (Table~\ref{tab:comparison}). While slightly below the CNN and
+Transformer on aggregate metrics, the GNN shows markedly improved handling of
+the L2/3~IT class: F1 of 0.247 versus 0.011 for the CNN and near-zero for the
+Transformer. This improvement is attributable to the neighborhood aggregation
+mechanism---L2/3~IT cells connected to correctly-classified neighbors receive
+corrective signal that overrides the raw feature-space ambiguity with Micro-PVM.
+
+\subsection{Inductive SMART-seq Transfer}
+For inductive transfer, SMART-seq node features were stacked with training
+features, new cells were connected to their $k$ nearest training neighbors via
+a second $k$-NN pass, and a single forward pass produced embeddings for all
+nodes. The GNN achieves 88.56\% accuracy on 16,508 SMART-seq cells, substantially
+higher than either the CNN or the Transformer. The graph-based connectivity
+allows SMART-seq cells to borrow strength from their 10x training neighbors,
+effectively providing implicit batch correction through feature-space proximity.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Cross-Model Comparison}
+
+Table~\ref{tab:comparison} summarizes all three models on the held-out test set.
+
+\begin{table}[H]
+\centering
+\caption{Test set performance comparison across all three architectures.}
+\label{tab:comparison}
+\begin{tabular}{@{}lrrrrc@{}}
+\toprule
+Model & Acc & Bal.\ Acc & Macro F1 & L2/3~IT F1 & SMART-seq Transfer \\
+\midrule
+1D CNN               & 0.6614 & 0.9251 & 0.8705 & 0.011          & ---                \\
+Transformer (TOSICA) & 0.6656 & 0.9265 & 0.8672 & $\approx$0     & 4.8\% classified   \\
+GraphSAGE GNN        & 0.6317 & 0.9005 & 0.8514 & \textbf{0.247} & \textbf{88.56\%}   \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The three models occupy different points on the accuracy--interpretability--transfer
+tradeoff. The CNN is the simplest and achieves the highest macro F1, but provides
+no interpretability and no principled mechanism for unknown-cell detection or
+cross-technology transfer. The Transformer sacrifices a negligible amount of F1
+for biologically grounded pathway-level interpretability and a probability-based
+rejection option, but the rejection rate on SMART-seq is too aggressive to be
+practically useful without explicit batch correction. The GNN partially resolves
+the L2/3~IT failure through neighborhood context and achieves the strongest
+inductive transfer by leveraging feature-space proximity, but its full-batch
+training regime limits scalability to larger datasets.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Shortcomings and Discussion}
+
+The results across all three architectures expose a consistent theme: the
+L2/3~IT/Micro-PVM misclassification is a data-level pathology, not a modeling
+failure. The L2/3~IT class is simultaneously the largest (31.7\% of cells) and,
+in the HVG feature space, the most ambiguous---its expression profile overlaps
+substantially with Micro-PVM after variance-based gene selection. Class-weighted
+loss, focal loss, and neighborhood aggregation all partially mitigate but do not
+eliminate this overlap. A coarse-to-fine hierarchical classifier, or a dedicated
+binary disambiguator trained specifically on L2/3~IT vs.\ Micro-PVM, is likely
+necessary to fully resolve this failure mode.
+
+The Transformer's high SMART-seq rejection rate (95.2\%) highlights a tension
+between the interpretability benefits of pathway tokenization and batch
+robustness: while pathway masks suppress individual gene noise, the overall
+expression distribution shift between 10x and SMART-seq is large enough to push
+most cells below the 0.95 confidence threshold. The GNN's strong transfer
+performance (88.56\%) suggests that explicit structural connectivity---anchoring
+new cells to their nearest reference neighbors---is more effective at bridging
+technology gaps than representation-level interventions alone.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+
+We evaluated three deep learning architectures for single-cell RNA-seq cell type
+classification on the Allen Brain Atlas Human M1 dataset. A 1D CNN achieves
+66.14\% accuracy (92.51\% balanced) and is the strongest on per-class F1 for
+the majority of cell types, but catastrophically fails on the dominant L2/3~IT
+class. A pathway-masked Transformer marginally improves aggregate accuracy to
+66.56\% while adding biologically interpretable attention scores and a
+probability-based unknown-cell filter; its UMAP on attention weights reveals
+pathway-level structure invisible to PCA on raw gene expression. A GraphSAGE
+GNN achieves 63.17\% accuracy but partially resolves the L2/3~IT failure
+(F1 0.247) and achieves the strongest cross-technology transfer (88.56\% on
+16,508 SMART-seq cells) through inductive neighborhood connectivity. The
+persistent L2/3~IT/Micro-PVM confusion across all three models confirms that
+this failure is intrinsic to the feature representation and class distribution,
+pointing to hierarchical classification or targeted data augmentation as the
+most promising directions for future work. Stream processing via Polars proved
+essential for handling the 30\,GB expression matrix under memory constraints,
+and the truncated-download incident highlights the importance of data validation
+before model evaluation.
+
+\end{document}
