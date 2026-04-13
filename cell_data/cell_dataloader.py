@@ -21,7 +21,6 @@ def get_dataloaders(data_dir: str, batch_size: int = 256, num_workers: int = 0,
             shuffle=(name == 'train'),
             num_workers=num_workers,
             pin_memory=pin,
-            labelencoder = result[name].labelencoder,  # type: ignore
         )
 
     return result
