@@ -157,6 +157,10 @@ def load_dataset(paths: dict, seed: int = 42) -> str:
         np.save(os.path.join(out_dir, f'y_{name}.npy'), y_split)
     np.save(os.path.join(out_dir, 'gene_names.npy'), gene_names)
     np.save(os.path.join(out_dir, 'class_names.npy'), class_names)
+    pickle_path = os.path.join(out_dir, 'label_encoder.pkl')
+    with open(pickle_path, 'wb') as f:
+        import pickle
+        pickle.dump(le, f)
 
     print(f'Saved raw splits to {out_dir}')
     return out_dir

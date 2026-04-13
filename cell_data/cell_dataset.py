@@ -9,10 +9,11 @@ from .preprocess import preprocess_hvg
 
 class GeneExpressionDataset(Dataset):
     """Wraps an (N, G) expression matrix and integer labels as a PyTorch Dataset."""
-
-    def __init__(self, X: np.ndarray, y: np.ndarray):
+    
+    def __init__(self, X: np.ndarray, y: np.ndarray, labelencoder=None):
         self.X = torch.from_numpy(np.asarray(X, dtype=np.float32))
         self.y = torch.from_numpy(np.asarray(y, dtype=np.int64))
+        self.labelencoder = labelencoder
 
     def __len__(self):
         return len(self.y)
@@ -39,16 +40,21 @@ def make_datasets(data_dir: str, n_hvg: int = 2000, min_gene_frac: float = 0.01)
     y_test = np.load(os.path.join(data_dir, 'y_test.npy'))
     gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
     class_names = np.load(os.path.join(data_dir, 'class_names.npy'), allow_pickle=True)
-
+    labelencoder = None
+    le_path = os.path.join(data_dir, 'label_encoder.pkl')
+    if os.path.exists(le_path):
+        import pickle
+        with open(le_path, 'rb') as f:
+            labelencoder = pickle.load(f)
     X_train, X_val, X_test, hvg_gene_names, scaler = preprocess_hvg(
         X_train, X_val, X_test, gene_names,
         n_hvg=n_hvg, min_gene_frac=min_gene_frac,
     )
 
     return {
-        'train': GeneExpressionDataset(X_train, y_train),
-        'val': GeneExpressionDataset(X_val, y_val),
-        'test': GeneExpressionDataset(X_test, y_test),
+        'train': GeneExpressionDataset(X_train, y_train, labelencoder=labelencoder),
+        'val': GeneExpressionDataset(X_val, y_val, labelencoder=labelencoder),
+        'test': GeneExpressionDataset(X_test, y_test, labelencoder=labelencoder),
         'class_names': class_names,
         'gene_names': hvg_gene_names,
         'scaler': scaler,
