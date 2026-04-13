@@ -5,15 +5,15 @@ import torch
 from torch.utils.data import Dataset
 
 from .preprocess import preprocess_hvg
-
+from sklearn.preprocessing import LabelEncoder
 
 class GeneExpressionDataset(Dataset):
     """Wraps an (N, G) expression matrix and integer labels as a PyTorch Dataset."""
     
-    def __init__(self, X: np.ndarray, y: np.ndarray, labelencoder=None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, labelencoder: LabelEncoder=None):
         self.X = torch.from_numpy(np.asarray(X, dtype=np.float32))
         self.y = torch.from_numpy(np.asarray(y, dtype=np.int64))
-        self.labelencoder = labelencoder
+        self.labelencoder: LabelEncoder = labelencoder
 
     def __len__(self):
         return len(self.y)
