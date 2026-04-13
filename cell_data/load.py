@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+import polars as pl
 
 
 DEFAULT_10X_PATHS = {
@@ -147,10 +148,28 @@ def _load_matrix(csv_path: str, sample_names: np.ndarray) -> np.ndarray:
 
     if not (os.path.exists(mat_path) and os.path.exists(names_path)):
         print(f'Caching {csv_path} -> {mat_path} (first run only)')
-        df = pd.read_csv(csv_path, index_col=0)
-        np.save(mat_path, df.values.astype(np.float32))
-        np.save(names_path, df.index.values.astype(str))
-        del df
+        header = pl.read_csv(csv_path, n_rows=0).columns
+        name_col, gene_cols = header[0], header[1:]
+        df = pl.read_csv(
+            csv_path,
+            schema_overrides={name_col: pl.Utf8,
+                              **{c: pl.Float32 for c in gene_cols}},
+        )
+        np.save(names_path, df[name_col].to_numpy().astype(str))
+
+        n_genes = len(gene_cols)
+        mat = np.lib.format.open_memmap(
+            mat_path, mode='w+', dtype=np.float32,
+            shape=(df.height, n_genes),
+        )
+        step = max(1, n_genes // 20)
+        for j, col in enumerate(gene_cols):
+            mat[:, j] = df[col].to_numpy()
+            if (j + 1) % step == 0 or (j + 1) == n_genes:
+                print(f'  caching matrix: {(j + 1) / n_genes * 100:5.1f}% '
+                      f'({j + 1:,}/{n_genes:,} genes)', flush=True)
+        mat.flush()
+        del df, mat
         gc.collect()
 
     X_full = np.load(mat_path, mmap_mode='r')
