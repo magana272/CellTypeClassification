@@ -38,7 +38,7 @@ def make_datasets(data_dir: str, n_hvg: int = 2000, min_gene_frac: float = 0.01)
     y_val = np.load(os.path.join(data_dir, 'y_val.npy'))
     y_test = np.load(os.path.join(data_dir, 'y_test.npy'))
     gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
-    class_names = np.load(os.path.join(data_dir, 'class_names.npy'))
+    class_names = np.load(os.path.join(data_dir, 'class_names.npy'), allow_pickle=True)
 
     X_train, X_val, X_test, hvg_gene_names, scaler = preprocess_hvg(
         X_train, X_val, X_test, gene_names,
