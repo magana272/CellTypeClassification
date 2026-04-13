@@ -1,6 +1,5 @@
 import gc
 import os
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -13,60 +12,34 @@ from tqdm.auto import tqdm
 DEFAULT_10X_PATHS = {
     'matrix': 'data/10x/matrix.csv',
     'metadata': 'data/10x/metadata.csv',
+    'dir': 'data/10x',
 }
 DEFAULT_SMARTSEQ_PATHS = {
     'matrix': 'data/smartseq/smartseq_data.csv',
     'metadata': 'data/smartseq/smartseq_meta.csv',
+    'dir': 'data/smartseq',
 }
 
 MIN_CELLS_PER_CLASS = 200
 TRAIN_FRAC, VAL_FRAC, TEST_FRAC = 0.80, 0.10, 0.10
 
 # Canonical subclass vocabulary shared between 10x (M1) and SMART-seq (MTG).
-# Any raw label not present here is dropped: it's either dataset-specific
-# (no counterpart in the other dataset) or unknown.
+# Any raw label not present here is dropped.
 CANONICAL_LABEL_MAP: dict[str, str] = {
-    # Glia
     'Astro': 'Astro', 'Astrocyte': 'Astro',
     'Oligo': 'Oligo', 'Oligodendrocyte': 'Oligo',
     'OPC': 'OPC',
-    # GABAergic
     'Lamp5': 'LAMP5', 'LAMP5': 'LAMP5',
     'Pvalb': 'PVALB', 'PVALB': 'PVALB',
     'Sst': 'SST',     'SST': 'SST',
     'Vip': 'VIP',     'VIP': 'VIP',
-    # Glutamatergic IT — layer splits collapsed because SMART-seq can't resolve them
     'L2/3 IT': 'IT', 'L5 IT': 'IT', 'L6 IT': 'IT',
     'IT': 'IT',      'L4 IT': 'IT',
-    # IT Car3 kept separate — both datasets resolve it
     'L6 IT Car3': 'IT Car3', 'L5/6 IT Car3': 'IT Car3',
-    # Deep-layer projection neurons
     'L5/6 NP': 'L5/6 NP',
     'L6 CT': 'L6 CT',
     'L6b': 'L6b',
-    # Intentionally absent (dropped as dataset-specific):
-    #   10x only:      L5 ET, Sncg
-    #   smartseq only: Microglia, PAX6
 }
-
-
-@dataclass
-class CellSplit:
-    class_names: np.ndarray
-    idx_train: np.ndarray
-    idx_val: np.ndarray
-    idx_test: np.ndarray
-    y_train: np.ndarray
-    y_val: np.ndarray
-    y_test: np.ndarray
-    sample_info: dict
-    X: np.ndarray  # (n_cells, n_genes) float32, rows aligned to idx_*
-    label_encoder: LabelEncoder
-
-    @property
-    def n_classes(self) -> int:
-        return len(self.class_names)
-    
 
 
 def _load_metadata(path: str) -> pd.DataFrame:
@@ -80,7 +53,7 @@ def _canonicalize_labels(meta: pd.DataFrame) -> pd.DataFrame:
     mapped = meta['subclass_label'].map(CANONICAL_LABEL_MAP)
     if mapped.isna().any():
         dropped = meta.loc[mapped.isna(), 'subclass_label'].value_counts()
-        print(f'Canonicalize: dropping {int(mapped.isna().sum()):,} cells '
+        print(f'Dropping {int(mapped.isna().sum()):,} cells '
               f'from non-shared labels: {dropped.to_dict()}')
     meta = meta.loc[mapped.notna()].copy()
     meta['subclass_label'] = mapped.dropna().values
@@ -93,60 +66,25 @@ def _filter_rare_classes(meta: pd.DataFrame, min_cells: int) -> pd.DataFrame:
     return meta[meta['subclass_label'].isin(keep)].reset_index(drop=True)
 
 
-def _encode_labels(meta: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, LabelEncoder]:
-    le = LabelEncoder()
-    y = le.fit_transform(meta['subclass_label'].values)
-    return y, le.classes_, le
-
-
 def _split_indices(y: np.ndarray, seed: int):
-    indices = np.arange(len(y))
+    idx = np.arange(len(y))
     idx_train, idx_temp, y_train, y_temp = train_test_split(
-        indices, y,
-        test_size=VAL_FRAC + TEST_FRAC,
-        stratify=y,
-        random_state=seed,
+        idx, y, test_size=VAL_FRAC + TEST_FRAC, stratify=y, random_state=seed,
     )
     idx_val, idx_test, y_val, y_test = train_test_split(
         idx_temp, y_temp,
         test_size=TEST_FRAC / (VAL_FRAC + TEST_FRAC),
-        stratify=y_temp,
-        random_state=seed,
+        stratify=y_temp, random_state=seed,
     )
     return idx_train, idx_val, idx_test, y_train, y_val, y_test
 
 
-def _build_sample_info(
-    meta: pd.DataFrame,
-    idx_train: np.ndarray,
-    idx_val: np.ndarray,
-    idx_test: np.ndarray,
-) -> dict:
-    names = meta['sample_name'].values
-    sample_info: dict = {}
-    for split_name, idxs in (('train', idx_train), ('val', idx_val), ('test', idx_test)):
-        for pos, i in enumerate(idxs):
-            sample_info[names[i]] = (split_name, pos)
-    return sample_info
-
-
-def _print_split_sizes(idx_train, idx_val, idx_test, total: int) -> None:
-    print(f'\nTrain: {len(idx_train):>6,} ({len(idx_train) / total * 100:.1f}%)')
-    print(f'Val:   {len(idx_val):>6,} ({len(idx_val) / total * 100:.1f}%)')
-    print(f'Test:  {len(idx_test):>6,} ({len(idx_test) / total * 100:.1f}%)')
-
-
-def _load_matrix(csv_path: str, sample_names: np.ndarray) -> np.ndarray:
-    """Load the expression matrix, aligned row-wise to ``sample_names``.
-
-    On first call, reads the CSV once and caches two sibling ``.npy`` files
-    next to it: ``<root>.npy`` (full (N, G) float32 matrix) and
-    ``<root>_cells.npy`` (the sample_name order of its rows). Subsequent
-    calls memmap the cache and fancy-index only the requested rows.
-    """
+def _load_matrix(csv_path: str, sample_names: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Load expression matrix aligned to sample_names, with .npy caching."""
     root, _ = os.path.splitext(csv_path)
     mat_path = root + '.npy'
     names_path = root + '_cells.npy'
+    genes_path = root + '_genes.npy'
 
     if not (os.path.exists(mat_path) and os.path.exists(names_path)):
         print(f'Caching {csv_path} -> {mat_path} (first run only)')
@@ -158,78 +96,80 @@ def _load_matrix(csv_path: str, sample_names: np.ndarray) -> np.ndarray:
                               **{c: pl.Float32 for c in gene_cols}},
         )
         np.save(names_path, df[name_col].to_numpy().astype(str))
+        np.save(genes_path, np.asarray(gene_cols, dtype=str))
 
-        n_genes = len(gene_cols)
         mat = np.lib.format.open_memmap(
             mat_path, mode='w+', dtype=np.float32,
-            shape=(df.height, n_genes),
+            shape=(df.height, len(gene_cols)),
         )
         chunk = 2048
-        n_chunks = (n_genes + chunk - 1) // chunk
-        for ci in tqdm(range(n_chunks), desc='caching matrix', unit='chunk'):
-            j0 = ci * chunk
-            j1 = min(j0 + chunk, n_genes)
-            block = df.select(gene_cols[j0:j1]).to_numpy()
-            mat[:, j0:j1] = block
-            del block
-            print(f'  caching matrix: {j1 / n_genes * 100:5.1f}% '
-                  f'({j1:,}/{n_genes:,} genes)', flush=True)
+        for ci in tqdm(range(0, len(gene_cols), chunk), desc='caching matrix'):
+            j1 = min(ci + chunk, len(gene_cols))
+            mat[:, ci:j1] = df.select(gene_cols[ci:j1]).to_numpy()
         mat.flush()
         del df, mat
         gc.collect()
 
     X_full = np.load(mat_path, mmap_mode='r')
     names_full = np.load(names_path)
+    gene_names = np.load(genes_path)
 
     row_of = {n: i for i, n in enumerate(names_full)}
-    try:
-        rows = np.fromiter(
-            (row_of[n] for n in sample_names),
-            dtype=np.int64,
-            count=len(sample_names),
-        )
-    except KeyError as e:
-        raise KeyError(f'sample {e} missing from matrix cache {mat_path}') from e
-
+    rows = np.fromiter(
+        (row_of[n] for n in sample_names), dtype=np.int64, count=len(sample_names),
+    )
     X = np.ascontiguousarray(X_full[rows])
     print(f'Expression matrix: {X.shape}')
-    return X
+    return X, gene_names
 
 
+def load_dataset(paths: dict, seed: int = 42) -> str:
+    """Load CSV, split into train/val/test, save as raw .npy files.
 
-def _build_split(paths: dict, seed: int) -> CellSplit:
+    Saves to paths['dir']: X_train.npy, y_train.npy, X_val.npy, y_val.npy,
+    X_test.npy, y_test.npy, gene_names.npy, class_names.npy.
+
+    Returns the output directory path.
+    """
+    out_dir = paths['dir']
+
+    if os.path.exists(os.path.join(out_dir, 'X_train.npy')):
+        print(f'Splits already exist in {out_dir}')
+        return out_dir
+
     meta = _load_metadata(paths['metadata'])
     meta = _canonicalize_labels(meta)
     meta = _filter_rare_classes(meta, MIN_CELLS_PER_CLASS)
-    y_all, class_names, le = _encode_labels(meta)
-    print(f'After class filter: {len(meta):,} cells, {len(class_names)} classes')
 
-    idx_train, idx_val, idx_test, y_train, y_val, y_test = _split_indices(y_all, seed)
-    sample_info = _build_sample_info(meta, idx_train, idx_val, idx_test)
-    _print_split_sizes(idx_train, idx_val, idx_test, len(y_all))
+    le = LabelEncoder()
+    y = le.fit_transform(meta['subclass_label'].values)
+    class_names = le.classes_
+    print(f'After filtering: {len(meta):,} cells, {len(class_names)} classes')
 
-    X = _load_matrix(paths['matrix'], meta['sample_name'].values)
+    idx_train, idx_val, idx_test, y_train, y_val, y_test = _split_indices(y, seed)
+    total = len(y)
+    print(f'Train: {len(idx_train):>6,} ({len(idx_train)/total*100:.1f}%)')
+    print(f'Val:   {len(idx_val):>6,} ({len(idx_val)/total*100:.1f}%)')
+    print(f'Test:  {len(idx_test):>6,} ({len(idx_test)/total*100:.1f}%)')
 
-    del meta
-    gc.collect()
+    X, gene_names = _load_matrix(paths['matrix'], meta['sample_name'].values)
 
-    return CellSplit(
-        class_names=class_names,
-        idx_train=idx_train,
-        idx_val=idx_val,
-        idx_test=idx_test,
-        y_train=y_train,
-        y_val=y_val,
-        y_test=y_test,
-        sample_info=sample_info,
-        X=X,
-        label_encoder=le,
-    )
+    os.makedirs(out_dir, exist_ok=True)
+    for name, idx, y_split in [('train', idx_train, y_train),
+                                ('val', idx_val, y_val),
+                                ('test', idx_test, y_test)]:
+        np.save(os.path.join(out_dir, f'X_{name}.npy'), X[idx])
+        np.save(os.path.join(out_dir, f'y_{name}.npy'), y_split)
+    np.save(os.path.join(out_dir, 'gene_names.npy'), gene_names)
+    np.save(os.path.join(out_dir, 'class_names.npy'), class_names)
 
-
-def get_10x_dataset(paths: dict = DEFAULT_10X_PATHS, seed: int = 42) -> CellSplit:
-    return _build_split(paths, seed)
+    print(f'Saved raw splits to {out_dir}')
+    return out_dir
 
 
-def get_smartseq_dataset(paths: dict = DEFAULT_SMARTSEQ_PATHS, seed: int = 42) -> CellSplit:
-    return _build_split(paths, seed)
+def load_10x(seed: int = 42) -> str:
+    return load_dataset(DEFAULT_10X_PATHS, seed)
+
+
+def load_smartseq(seed: int = 42) -> str:
+    return load_dataset(DEFAULT_SMARTSEQ_PATHS, seed)
