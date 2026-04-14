@@ -10,7 +10,7 @@ N_HVG = 2000
 DATA_DIR = 'data/10x'
 N_TRIALS = 2
 TUNE_EPOCHS = 5
-TUNE_BATCH_SIZE = 64
+TUNE_BATCH_SIZE = 256
 
 COFIG = {
     'model': 'CellTypeCNN',
