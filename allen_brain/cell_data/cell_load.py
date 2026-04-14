@@ -9,7 +9,6 @@ import polars as pl
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
-COPY_THREADS = 8
 
 
 DEFAULT_10X_PATHS = {

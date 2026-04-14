@@ -11,7 +11,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from alive_progress import alive_bar
 import optuna
 
-from allen_brain.cell_data.cell_dataset import make_dataset
+from allen_brain.cell_data.cell_dataset import GeneExpressionDataset, make_dataset
 from allen_brain.models import get_model
 
 import os
@@ -73,8 +73,8 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE):
     return train_loader, val_loader
 
 
-def class_weights(ds, device=DEVICE):
-    counts = np.bincount(ds.y.cpu().numpy(), minlength=ds.n_classes).astype(np.float32)
+def class_weights(ds: GeneExpressionDataset, device=DEVICE):
+    counts = np.bincount(ds.y, minlength=ds.n_classes).astype(np.float32)
     w = torch.tensor(1.0 / (counts + 1e-6), dtype=torch.float32).to(device)
     return w / w.sum() * ds.n_classes
 

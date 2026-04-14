@@ -33,13 +33,13 @@ class GeneExpressionDataset(Dataset):
                  gene_names=None,
                  class_names=None):
 
-        self.X = np.load(X_path, mmap_mode='r')
-        self.y = np.load(y_path, mmap_mode='r')
-        self.split = split
+        self.X : np.ndarray = np.load(X_path, mmap_mode='r')
+        self.y : np.ndarray = np.load(y_path, mmap_mode='r')
+        self.split: str = split
         self.labelencoder: LabelEncoder = labelencoder
-        self.n_classes = len(labelencoder.classes_) if labelencoder else int(self.y.max()) + 1
-        self.class_names = class_names if class_names is not None else (labelencoder.classes_ if labelencoder else np.array([str(i) for i in range(self.n_classes)]))
-        self.gene_names = gene_names
+        self.n_classes: int = len(labelencoder.classes_) if labelencoder else int(self.y.max()) + 1
+        self.class_names: np.ndarray = class_names if class_names is not None else (labelencoder.classes_ if labelencoder else np.array([str(i) for i in range(self.n_classes)]))
+        self.gene_names: np.ndarray = gene_names
 
 
     def __len__(self):
