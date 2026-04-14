@@ -110,21 +110,17 @@ def load_dataset(paths: dict, seed: int = 42) -> str:
     X_mmap, row_map, gene_names = load_matrix(paths['matrix'], meta['sample_name'].values)
 
     os.makedirs(out_dir, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=COPY_THREADS) as ex:
-        for name, idx, y_split in [('train', idx_train, y_train), ('val', idx_val, y_val), ('test', idx_test, y_test)]:
-            mmap_rows = row_map[idx]
-            sort_order = np.argsort(mmap_rows)
-            sorted_rows = mmap_rows[sort_order]
-            mm = np.lib.format.open_memmap(
-                os.path.join(out_dir, f'X_{name}.npy'),
-                mode='w+', dtype=X_mmap.dtype, shape=(len(sorted_rows), X_mmap.shape[1]),
-            )
-            bounds = np.linspace(0, len(sorted_rows), COPY_THREADS + 1, dtype=int)
-            def _copy(s, e, _rows=sorted_rows, _mm=mm):
-                np.take(X_mmap, _rows[s:e], axis=0, out=_mm[s:e])
-            list(ex.map(lambda b: _copy(*b), zip(bounds[:-1], bounds[1:])))
-            del mm
-            np.save(os.path.join(out_dir, f'y_{name}.npy'), y_split[sort_order])
+    for name, idx, y_split in [('train', idx_train, y_train), ('val', idx_val, y_val), ('test', idx_test, y_test)]:
+        mmap_rows = row_map[idx]
+        sort_order = np.argsort(mmap_rows)
+        sorted_rows = mmap_rows[sort_order]
+        mm = np.lib.format.open_memmap(
+            os.path.join(out_dir, f'X_{name}.npy'),
+            mode='w+', dtype=X_mmap.dtype, shape=(len(sorted_rows), X_mmap.shape[1]),
+        )
+        np.take(X_mmap, sorted_rows, axis=0, out=mm)
+        del mm
+        np.save(os.path.join(out_dir, f'y_{name}.npy'), y_split[sort_order])
     del X_mmap; gc.collect()
 
     np.save(os.path.join(out_dir, 'gene_names.npy'), gene_names)
