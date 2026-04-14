@@ -14,6 +14,7 @@ import optuna
 from allen_brain.cell_data.cell_dataset import make_dataset
 from allen_brain.models import get_model
 
+import os
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -37,30 +38,28 @@ def _tune_loaders(ds, ds_val, tune_batch_size, default_loaders):
         return default_loaders
     pin = DEVICE.type == 'cuda'
     tune_train = DataLoader(ds, batch_size=tune_batch_size, shuffle=True,
-                            drop_last=True, num_workers=0, pin_memory=pin)
+                            drop_last=True, num_workers=-1, prefetch_factor=os.cpu_count()//2 if pin else None, pin_memory=pin)
     tune_val = DataLoader(ds_val, batch_size=tune_batch_size, shuffle=False,
-                          num_workers=0, pin_memory=pin)
+                          num_workers=-1,prefetch_factor=os.cpu_count()//2 if pin else None, pin_memory=pin)
     return (tune_train, tune_val)
 
 
 def train_with_tuning(cfg, data_dir, squeeze_channel,
                       make_builder=None, n_trials=15, tune_epochs=5,
                       tune_batch_size=None):
-    ds, ds_val, train_loader, val_loader = make_dataloaders(data_dir, cfg['batch_size'])
+    train_loader, val_loader = make_dataloaders(data_dir, cfg['batch_size'])
     loaders = (train_loader, val_loader)
-    tune_loaders = _tune_loaders(ds, ds_val, tune_batch_size or cfg['batch_size'], loaders)
-    builder = (make_builder(ds) if make_builder
-               else (lambda: build_model(cfg['model'], len(ds.gene_names), ds.n_classes)))
-    best_params = run_hparam_search(cfg, builder, ds, tune_loaders, squeeze_channel,
+    builder =  lambda _ : build_model(cfg['model'], len(train_loader.gene_names), train_loader.dataset.n_classes)
+    best_params = run_hparam_search(cfg, builder, train_loader.dataset, loaders, squeeze_channel,
                                     n_trials=n_trials, tune_epochs=tune_epochs)
     if best_params is not None:
         cfg['lr'] = best_params['lr']
         cfg['weight_decay'] = best_params['weight_decay']
     model = builder()
-    criterion = cfg['loss'](weight=class_weights(ds), label_smoothing=0.1)
+    criterion = cfg['loss'](weight=class_weights(train_loader.dataset), label_smoothing=0.1)
     optimizer, scheduler = build_optimizer(
         model, cfg['lr'], cfg['weight_decay'], cfg['epochs'], opt_cls=cfg['optimizer'])
-    writer, ckpt = make_writer_and_ckpt(cfg, len(ds.gene_names))
+    writer, ckpt = make_writer_and_ckpt(cfg, len(train_loader.gene_names))
     print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
     print_header()
     best = train(model, loaders, criterion, optimizer, scheduler,
@@ -73,13 +72,14 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE):
     ds = make_dataset(data_dir, split='train')
     ds_val = make_dataset(data_dir, split='val')
     pin = device.type == 'cuda'
+    loader_kwargs = dict(num_workers=-1, pin_memory=pin, persistent_workers=pin,
+                         prefetch_factor=os.cpu_count()//2 if pin else None)
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
-                              drop_last=drop_last_train, num_workers=0, pin_memory=pin)
-    val_loader = DataLoader(ds_val, batch_size=batch_size, shuffle=False,
-                            num_workers=0, pin_memory=pin)
+                              drop_last=drop_last_train, **loader_kwargs)
+    val_loader = DataLoader(ds_val, batch_size=batch_size, shuffle=False, **loader_kwargs)
     print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes (CPU, transfer to {device})')
     print(f'val:   {len(ds_val)} cells')
-    return ds, ds_val, train_loader, val_loader
+    return train_loader, val_loader
 
 
 def class_weights(ds, device=DEVICE):
@@ -95,32 +95,30 @@ def build_optimizer(model, lr, weight_decay, epochs, opt_cls=optim.AdamW):
 
 
 def prep_batch(xb, yb, device=DEVICE, squeeze_channel=False):
-    xb = xb.to(device, non_blocking=True)
-    yb = yb.to(device, non_blocking=True)
+    xb = xb.to(device)
+    yb = yb.to(device)
     if squeeze_channel and xb.dim() == 3:
         xb = xb.squeeze(1)
     return xb, yb
 
 
-def train_batch(model, xb, yb, criterion, optimizer, scaler):
+def _autocast(xb):
+    return torch.autocast('cuda', dtype=torch.bfloat16, enabled=xb.is_cuda)
+
+
+def train_batch(model, xb, yb, criterion, optimizer):
     optimizer.zero_grad(set_to_none=True)
-    logits = model(xb)
-    loss = criterion(logits, yb)
-    if scaler is not None:
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-    else:
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+    with _autocast(xb):
+        logits = model(xb)
+        loss = criterion(logits, yb)
+    loss.backward()
+    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    optimizer.step()
     return loss, logits
 
 
-def run_epoch(model, loader, criterion, optimizer, scaler,
-              device=DEVICE, train=True, squeeze_channel=False):
+def run_epoch(model, loader, criterion, optimizer,
+              device=DEVICE, train=True, squeeze_channel=False, on_batch=None):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     ctx = torch.enable_grad() if train else torch.no_grad()
@@ -128,13 +126,16 @@ def run_epoch(model, loader, criterion, optimizer, scaler,
         for xb, yb in loader:
             xb, yb = prep_batch(xb, yb, device, squeeze_channel)
             if train:
-                loss, logits = train_batch(model, xb, yb, criterion, optimizer, scaler)
+                loss, logits = train_batch(model, xb, yb, criterion, optimizer)
             else:
-                logits = model(xb)
-                loss = criterion(logits, yb)
+                with _autocast(xb):
+                    logits = model(xb)
+                    loss = criterion(logits, yb)
             total_loss += loss.item() * len(yb)
             correct    += (logits.argmax(1) == yb).sum().item()
             total      += len(yb)
+            if on_batch is not None:
+                on_batch()
     return total_loss / total, correct / total
 
 
@@ -159,12 +160,15 @@ def make_run_name(model_name, n_hvg, batch_size, epochs, lr, wd):
     return f'{model_name}_hvg{n_hvg}_bs{batch_size}_epochs{epochs}_lr{lr}_wd{wd}_{ts}'
 
 
-def _step_epoch(model, loaders, criterion, optimizer, scheduler, scaler, device, squeeze_channel):
+def _step_epoch(model, loaders, criterion, optimizer, scheduler,
+                device, squeeze_channel, on_batch=None):
     train_loader, val_loader = loaders
-    tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, scaler,
-                                device=device, train=True, squeeze_channel=squeeze_channel)
-    vl_loss, vl_acc = run_epoch(model, val_loader, criterion, optimizer, scaler,
-                                device=device, train=False, squeeze_channel=squeeze_channel)
+    tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer,
+                                device=device, train=True, squeeze_channel=squeeze_channel,
+                                on_batch=on_batch)
+    vl_loss, vl_acc = run_epoch(model, val_loader, criterion, optimizer,
+                                device=device, train=False, squeeze_channel=squeeze_channel,
+                                on_batch=on_batch)
     scheduler.step()
     return tr_loss, tr_acc, vl_loss, vl_acc
 
@@ -185,9 +189,11 @@ def run_optuna_study(cfg, objective, n_trials, tune_epochs):
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
         direction='maximize',
-        sampler=optuna.samplers.TPESampler(seed=cfg.get('seed', 0)))
-    print(f'Hparam search: {n_trials} trials x {tune_epochs} epochs')
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+        sampler=optuna.samplers.TPESampler(seed=cfg.get('seed', 0)),
+        pruner=optuna.pruners.HyperbandPruner(
+            min_resource=1, max_resource=tune_epochs, reduction_factor=3))
+    print(f'Hparam search: {n_trials} trials x up to {tune_epochs} epochs (Hyperband)')
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     if not completed:
         print('WARNING: no trials completed (all pruned/failed) — '
@@ -219,7 +225,7 @@ def run_hparam_search(cfg, build_model_fn, ds, loaders, squeeze_channel,
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
             return train(model, loaders, criterion, optimizer, scheduler,
                          tune_epochs, writer, ckpt, squeeze_channel=squeeze_channel,
-                         compile_model=False)
+                         compile_model=False, trial=trial)
         except torch.cuda.OutOfMemoryError:
             print(f'Trial {trial.number}: CUDA OOM — pruning')
             raise optuna.TrialPruned()
@@ -253,7 +259,7 @@ def _graph_eval(model, data, criterion, val_mask):
 
 
 def train_graph(model, data, criterion, optimizer, scheduler, epochs, writer, ckpt,
-                patience=20):
+                patience=20, trial=None):
     best_loss, best_acc, no_improve = float('inf'), 0.0, 0
     for epoch in range(1, epochs + 1):
         tr_loss, tr_acc = _graph_step(model, data, criterion, optimizer, data.train_mask)
@@ -268,6 +274,10 @@ def train_graph(model, data, criterion, optimizer, scheduler, epochs, writer, ck
         print_row(epoch, tr_loss, tr_acc, vl_loss, vl_acc,
                   scheduler.get_last_lr()[0], ' *' if improved else '')
         log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
+        if trial is not None:
+            trial.report(vl_acc, epoch)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
         if no_improve >= patience:
             print(f'Early stopping at epoch {epoch}')
             break
@@ -286,7 +296,8 @@ def run_graph_hparam_search(cfg, build_model_fn, data, weights,
                 model, lr, wd, tune_epochs, opt_cls=cfg['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
             return train_graph(model, data, criterion, optimizer, scheduler,
-                               tune_epochs, writer, ckpt, patience=tune_epochs)
+                               tune_epochs, writer, ckpt, patience=tune_epochs,
+                               trial=trial)
         except torch.cuda.OutOfMemoryError:
             print(f'Trial {trial.number}: CUDA OOM — pruning')
             raise optuna.TrialPruned()
@@ -323,15 +334,22 @@ def train_graph_with_tuning(cfg, data, n_features, n_classes, weights,
 
 
 def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
-          device=DEVICE, squeeze_channel=False, patience=15, compile_model=True):
+          device=DEVICE, squeeze_channel=False, patience=15, compile_model=True,
+          trial=None):
     if compile_model and device.type == 'cuda':
         model = torch.compile(model)
-    scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     best_loss, best_acc, no_improve = float('inf'), 0.0, 0
-    with alive_bar(epochs) as bar:
+    train_loader, val_loader = loaders
+    total_steps = epochs * (len(train_loader) + len(val_loader))
+    with alive_bar(total_steps) as bar:
         for epoch in range(1, epochs + 1):
             tr_loss, tr_acc, vl_loss, vl_acc = _step_epoch(
-                model, loaders, criterion, optimizer, scheduler, scaler, device, squeeze_channel)
+                model, loaders, criterion, optimizer, scheduler,
+                device, squeeze_channel, on_batch=bar)
+            if trial is not None:
+                trial.report(vl_acc, epoch)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
             improved = vl_loss < best_loss - 1e-4
             if improved:
                 best_loss, best_acc, no_improve = vl_loss, vl_acc, 0
@@ -339,9 +357,8 @@ def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
             else:
                 no_improve += 1
             flag = ' *' if improved else ''
-            bar.text(f'tl={tr_loss:.4f} ta={tr_acc:.4f} vl={vl_loss:.4f} va={vl_acc:.4f}{flag}')
+            bar.text(f'ep {epoch}/{epochs} tl={tr_loss:.4f} ta={tr_acc:.4f} vl={vl_loss:.4f} va={vl_acc:.4f}{flag}')
             log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
-            bar()
             if no_improve >= patience:
                 break
     return best_acc

@@ -146,7 +146,6 @@ async def download_data_async(root: str = "data") -> None:
                 )
             )
 
-
 def download_data(root: str = "data") -> None:
     asyncio.run(download_data_async(root))
 
