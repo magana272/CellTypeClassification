@@ -33,15 +33,6 @@ def make_writer_and_ckpt(cfg, n_features):
     return writer, f'best_model_{run_name}.pt'
 
 
-def _tune_loaders(ds, ds_val, tune_batch_size, default_loaders):
-    if tune_batch_size == default_loaders[0].batch_size:
-        return default_loaders
-    pin = DEVICE.type == 'cuda'
-    tune_train = DataLoader(ds, batch_size=tune_batch_size, shuffle=True,
-                            drop_last=True, num_workers=-1, prefetch_factor=os.cpu_count()//2 if pin else None, pin_memory=pin)
-    tune_val = DataLoader(ds_val, batch_size=tune_batch_size, shuffle=False,
-                          num_workers=-1,prefetch_factor=os.cpu_count()//2 if pin else None, pin_memory=pin)
-    return (tune_train, tune_val)
 
 
 def train_with_tuning(cfg, data_dir, squeeze_channel,
@@ -72,8 +63,8 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE):
     ds = make_dataset(data_dir, split='train')
     ds_val = make_dataset(data_dir, split='val')
     pin = device.type == 'cuda'
-    loader_kwargs = dict(num_workers=-1, pin_memory=pin, persistent_workers=pin,
-                         prefetch_factor=os.cpu_count()//2 if pin else None)
+    loader_kwargs = dict(num_workers=2, pin_memory=pin, persistent_workers=pin,
+                         prefetch_factor=2 if pin else None)
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
                               drop_last=drop_last_train, **loader_kwargs)
     val_loader = DataLoader(ds_val, batch_size=batch_size, shuffle=False, **loader_kwargs)
