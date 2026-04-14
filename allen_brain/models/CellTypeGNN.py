@@ -1,8 +1,10 @@
 
 from torch import nn
+import torch
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv
-    
+torch.set_float32_matmul_precision('high')
+ 
 class ResidualSAGEBlock(nn.Module):
     """SAGEConv with LayerNorm, GELU, and a residual projection."""
     def __init__(self, in_dim, out_dim, dropout=0.3):

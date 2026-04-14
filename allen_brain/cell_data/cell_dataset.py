@@ -7,13 +7,32 @@ from torch.utils.data import Dataset
 from .cell_preprocess import preprocess_hvg
 from sklearn.preprocessing import LabelEncoder
 
+
+def _as_float32_contig(X):
+    arr = np.asarray(X)
+    if arr.dtype != np.float32:
+        arr = arr.astype(np.float32, copy=False)
+    if not arr.flags['C_CONTIGUOUS']:
+        arr = np.ascontiguousarray(arr)
+    return arr
+
+
+def _as_int64_contig(y):
+    arr = np.asarray(y)
+    if arr.dtype != np.int64:
+        arr = arr.astype(np.int64, copy=False)
+    if not arr.flags['C_CONTIGUOUS']:
+        arr = np.ascontiguousarray(arr)
+    return arr
+
+
 class GeneExpressionDataset(Dataset):
     """Wraps an (N, G) expression matrix and integer labels as a PyTorch Dataset."""
     
     def __init__(self, X: np.ndarray, y: np.ndarray, labelencoder: LabelEncoder=None, split=None, gene_names=None, class_names=None):
-        
-        self.X = torch.from_numpy(np.array(X, dtype=np.float32))
-        self.y = torch.from_numpy(np.array(y, dtype=np.int64))
+
+        self.X = torch.from_numpy(_as_float32_contig(X))
+        self.y = torch.from_numpy(_as_int64_contig(y))
         self.split = split
         self.labelencoder: LabelEncoder = labelencoder
         self.n_classes = len(labelencoder.classes_) if labelencoder else int(self.y.max()) + 1
@@ -59,7 +78,7 @@ def make_split_dataset(data_dir: str, split='train') -> GeneExpressionDataset:
     """
     
     
-    X = np.load(os.path.join(data_dir, f'X_{split}.npy'), mmap_mode='r')
+    X = np.load(os.path.join(data_dir, f'X_{split}.npy'))
     y = np.load(os.path.join(data_dir, f'y_{split}.npy'))
     gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
     class_names = np.load(os.path.join(data_dir, 'class_names.npy'), allow_pickle=True)
