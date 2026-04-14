@@ -11,7 +11,7 @@ from sklearn.decomposition import PCA
 
 import allen_brain.cell_data.cell_dataset as cell_dataset
 
-
+import os
 def _to_numpy(a):
     if hasattr(a, 'detach'):
         a = a.detach().cpu().numpy()
@@ -119,7 +119,7 @@ def plot_umap(ds: cell_dataset.GeneExpressionDataset, X_pca=None,
         umap_labels = labels
 
     reducer = umap.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=min_dist,
-                        random_state=seed, verbose=True)
+                        random_state=seed, verbose=True, n_jobs=os.cpu_count())
     X_umap = reducer.fit_transform(X_input)
 
     palette = sns.color_palette('tab20', len(class_names))
