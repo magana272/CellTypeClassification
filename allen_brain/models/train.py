@@ -40,7 +40,7 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
                       tune_batch_size=None):
     train_loader, val_loader = make_dataloaders(data_dir, cfg['batch_size'])
     loaders = (train_loader, val_loader)
-    builder =  lambda _ : build_model(cfg['model'], len(train_loader.gene_names), train_loader.dataset.n_classes)
+    builder =  lambda: build_model(cfg['model'], len(train_loader.gene_names), train_loader.dataset.n_classes)
     best_params = run_hparam_search(cfg, builder, train_loader.dataset, loaders, squeeze_channel,
                                     n_trials=n_trials, tune_epochs=tune_epochs)
     if best_params is not None:
