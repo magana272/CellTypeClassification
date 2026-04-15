@@ -379,8 +379,7 @@ def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
                 no_improve += 1
             flag = ' *' if improved else ''
             bar.text(f'ep {epoch}/{epochs} tl={tr_loss:.4f} ta={tr_acc:.4f} vl={vl_loss:.4f} va={vl_acc:.4f}{flag}')
-            log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc,
-                      lr=scheduler.get_last_lr()[0])
+            log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
             if no_improve >= patience:
                 break
     return best_acc
