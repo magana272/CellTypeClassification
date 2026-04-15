@@ -42,16 +42,42 @@ def build_masks(sizes):
     return masks['train'], masks['val'], masks['test']
 
 
+def _faiss_knn(X_all, k):
+    """Try FAISS (GPU then CPU) for fast cosine k-NN. Returns indices or None."""
+    try:
+        import faiss
+    except ImportError:
+        return None
+    X_norm = (X_all / np.linalg.norm(X_all, axis=1, keepdims=True)).astype(np.float32)
+    # Try GPU first
+    if torch.cuda.is_available():
+        try:
+            index = faiss.GpuIndexFlatIP(faiss.StandardGpuResources(), X_norm.shape[1])
+            index.add(X_norm)
+            _, indices = index.search(X_norm, k + 1)
+            print('  (FAISS GPU)')
+            return indices
+        except Exception as e:
+            print(f'  FAISS GPU failed ({e}), trying CPU...')
+    # CPU fallback
+    index = faiss.IndexFlatIP(X_norm.shape[1])
+    index.add(X_norm)
+    _, indices = index.search(X_norm, k + 1)
+    print('  (FAISS CPU)')
+    return indices
+
+
 def build_knn_edges(X_all, k):
     """Build symmetric k-NN edge index using cosine distance."""
     n_total = X_all.shape[0]
     print(f'Building k={k} cosine-NN graph on {n_total:,} cells...')
-    used_faiss = False
-
-    from sklearn.neighbors import NearestNeighbors
-    nbrs = NearestNeighbors(n_neighbors=k + 1, metric='cosine',
-                            algorithm='brute').fit(X_all)
-    _, indices = nbrs.kneighbors(X_all)
+    indices = _faiss_knn(X_all, k)
+    if indices is None:
+        from sklearn.neighbors import NearestNeighbors
+        print('  (sklearn brute-force — install faiss-cpu for 10x speed)')
+        nbrs = NearestNeighbors(n_neighbors=k + 1, metric='cosine',
+                                algorithm='brute').fit(X_all)
+        _, indices = nbrs.kneighbors(X_all)
     src = np.repeat(np.arange(n_total), k)
     dst = indices[:, 1:].reshape(-1)
     src_sym = np.concatenate([src, dst])
