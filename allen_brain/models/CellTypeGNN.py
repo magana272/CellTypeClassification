@@ -10,9 +10,6 @@ from torch_geometric.nn import SAGEConv
 torch.set_float32_matmul_precision('high')
 
 
-# ---------------------------------------------------------------------------
-# Graph data helpers (moved from 4_GNN.py)
-# ---------------------------------------------------------------------------
 
 def load_combined_xy(data_dir):
     """Load all splits into a single pre-allocated X buffer (no vstack copy)."""

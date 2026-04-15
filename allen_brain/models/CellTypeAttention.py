@@ -8,9 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ---------------------------------------------------------------------------
-# Pathway mask helpers (moved from 4_Transformer.py)
-# ---------------------------------------------------------------------------
+
 
 _DEFAULT_GMT_URL = ('https://data.broadinstitute.org/gsea-msigdb/msigdb/'
                     'release/2023.2.Hs/c2.cp.reactome.v2023.2.Hs.symbols.gmt')

@@ -1,6 +1,7 @@
 """Shared training utilities: dataloaders, class weights, epoch loop, checkpointing, evaluation."""
 
 import gc
+import json
 import os
 
 import numpy as np
@@ -113,9 +114,10 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
         model, lr, wd, cfg['epochs'], opt_cls=opt_name)
     writer, ckpt = make_writer_and_ckpt(cfg, len(ds.gene_names))
 
-    # Save HVG indices alongside checkpoint for evaluation
+    ckpt_dir = os.path.dirname(ckpt)
     if hvg_idx is not None:
-        np.save(os.path.join(os.path.dirname(ckpt), 'hvg_indices.npy'), hvg_idx)
+        np.save(os.path.join(ckpt_dir, 'hvg_indices.npy'), hvg_idx)
+    _save_model_kwargs(ckpt_dir, model_kw)
 
     print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
     print_header()
@@ -517,6 +519,7 @@ def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
     optimizer, scheduler = build_optimizer(
         model, lr, wd, cfg['epochs'], opt_cls=opt_name)
     writer, ckpt = make_writer_and_ckpt(cfg, n_features)
+    _save_model_kwargs(os.path.dirname(ckpt), model_kw)
     print(f'\nData: {data}')
     print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
     print_header()
@@ -555,6 +558,28 @@ def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
             if no_improve >= patience:
                 break
     return best_acc
+
+
+# ---------------------------------------------------------------------------
+# Model kwargs persistence (so evaluate can reconstruct the exact architecture)
+# ---------------------------------------------------------------------------
+
+def _save_model_kwargs(ckpt_dir, model_kw):
+    """Save model constructor kwargs as JSON next to the checkpoint."""
+    # Filter out non-serialisable values (e.g. torch.Tensor masks)
+    serialisable = {k: v for k, v in model_kw.items()
+                    if isinstance(v, (int, float, str, bool, type(None)))}
+    with open(os.path.join(ckpt_dir, 'model_kwargs.json'), 'w') as f:
+        json.dump(serialisable, f, indent=2)
+
+
+def _load_model_kwargs(ckpt_path):
+    """Load saved model kwargs from the checkpoint directory, if available."""
+    p = os.path.join(os.path.dirname(ckpt_path), 'model_kwargs.json')
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -644,8 +669,11 @@ def evaluate(cfg, data_dir, ckpt_path, squeeze_channel=False,
     n_classes = ds_test.n_classes
     class_names = list(ds_test.class_names)
 
-    extra_kw = extra_model_kwargs or {}
-    model = build_model(cfg['model'], n_features, n_classes, **extra_kw)
+    # Merge saved architectural kwargs with any extra kwargs (e.g. mask)
+    saved_kw = _load_model_kwargs(ckpt_path)
+    if extra_model_kwargs:
+        saved_kw.update(extra_model_kwargs)
+    model = build_model(cfg['model'], n_features, n_classes, **saved_kw)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
     print(f'Loaded checkpoint: {ckpt_path}')
@@ -665,7 +693,8 @@ def evaluate_graph(cfg, data, ckpt_path, n_features, n_classes,
 
     Returns dict with accuracy, f1, precision, recall, confusion_matrix.
     """
-    model = build_model(cfg['model'], n_features, n_classes)
+    saved_kw = _load_model_kwargs(ckpt_path)
+    model = build_model(cfg['model'], n_features, n_classes, **saved_kw)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
     print(f'Loaded checkpoint: {ckpt_path}')
