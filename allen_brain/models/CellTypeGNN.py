@@ -43,7 +43,7 @@ def build_masks(sizes):
         offset += sizes[s]
     return masks['train'], masks['val'], masks['test']
 
-def _torch_knn(X_all, k, batch_size=2048):
+def _torch_knn(X_all, k, batch_size=256):
     X = torch.from_numpy(X_all).to('cuda')
     X = X / X.norm(dim=1, keepdim=True)
     indices = torch.empty(X.shape[0], k + 1, dtype=torch.long)
