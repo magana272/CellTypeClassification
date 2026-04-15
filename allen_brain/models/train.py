@@ -173,7 +173,7 @@ def _step_epoch(model, loaders, criterion, optimizer, scheduler,
     return tr_loss, tr_acc, vl_loss, vl_acc
 
 
-def suggest_lr(trial):
+def suggest_lr_wd(trial):
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
     wd = trial.suggest_float('weight_decay', 1e-7, 1e-3, log=True)
     return lr, wd
@@ -211,19 +211,43 @@ def _cuda_cleanup():
 
 
 def run_hparam_search(cfg, build_model_fn, ds, loaders, squeeze_channel,
-                      n_trials=15, tune_epochs=5):
-    weights = class_weights(ds)
+                      n_trials=15, tune_epochs=5,
+                      data_dir=None, n_hvg_range=None):
+    """Optuna hparam search over lr, weight_decay, and optionally n_hvg.
+
+    Parameters
+    ----------
+    n_hvg_range : tuple (min, max, step), optional
+        When provided, n_hvg is tuned alongside lr/wd.  *data_dir* must also
+        be given so that dataloaders can be rebuilt for each candidate n_hvg.
+    """
+    default_weights = class_weights(ds)
 
     def objective(trial):
         model = optimizer = scheduler = writer = None
+        trial_loaders = loaders
         try:
-            lr = suggest_lr(trial)
-            model = build_model_fn()
-            criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+            lr, wd = suggest_lr_wd(trial)
+
+            if n_hvg_range is not None:
+                n_hvg = trial.suggest_int(
+                    'n_hvg', n_hvg_range[0], n_hvg_range[1],
+                    step=n_hvg_range[2])
+                trial_loaders = make_dataloaders(
+                    data_dir, cfg['batch_size'], n_hvg=n_hvg)
+                trial_ds = trial_loaders[0].dataset
+                n_feat = len(trial_ds.gene_names)
+                model = build_model(cfg['model'], n_feat, trial_ds.n_classes)
+                w = class_weights(trial_ds)
+            else:
+                model = build_model_fn()
+                w = default_weights
+
+            criterion = nn.CrossEntropyLoss(weight=w, label_smoothing=0.1)
             optimizer, scheduler = build_optimizer(
-                model, lr, cfg['weight_decay'], tune_epochs, opt_cls=cfg['optimizer'])
+                model, lr, wd, tune_epochs, opt_cls=cfg['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
-            return train(model, loaders, criterion, optimizer, scheduler,
+            return train(model, trial_loaders, criterion, optimizer, scheduler,
                          tune_epochs, writer, ckpt, squeeze_channel=squeeze_channel,
                          compile_model=False, trial=trial)
         except torch.cuda.OutOfMemoryError:

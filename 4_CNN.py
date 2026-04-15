@@ -6,6 +6,7 @@ from allen_brain.models import train as T
 SEED = 42
 BATCH_SIZE = 512*2
 N_HVG = 2000
+N_HVG_RANGE = (500, 5000, 500)   # (min, max, step) for Optuna tuning
 DATA_DIR = 'data/10x'
 N_TRIALS = 5
 TUNE_EPOCHS = 10
@@ -38,14 +39,24 @@ def main():
     def builder():
         return T.build_model(cfg['model'], n_features, ds.n_classes)
 
-    # 2. Optuna hparam search over lr / weight_decay with Hyperband pruner.
+    # 2. Optuna hparam search over lr / weight_decay / n_hvg with Hyperband pruner.
     best_params = T.run_hparam_search(
         cfg, builder, ds, loaders, squeeze_channel,
         n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS,
+        data_dir=DATA_DIR, n_hvg_range=N_HVG_RANGE,
     )
     if best_params is not None:
         cfg['lr'] = best_params['lr']
         cfg['weight_decay'] = best_params['weight_decay']
+        if 'n_hvg' in best_params:
+            cfg['n_hvg'] = best_params['n_hvg']
+            # Rebuild dataloaders with the tuned n_hvg.
+            train_loader, val_loader = T.make_dataloaders(
+                DATA_DIR, cfg['batch_size'], n_hvg=cfg['n_hvg'])
+            loaders = (train_loader, val_loader)
+            ds = train_loader.dataset
+            n_features = len(ds.gene_names)
+            builder = lambda: T.build_model(cfg['model'], n_features, ds.n_classes)
 
     # 3. Final training run with the tuned hparams.
     model = builder()
