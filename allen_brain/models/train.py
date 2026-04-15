@@ -272,9 +272,9 @@ def suggest_hparams(trial, model_name):
         params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
         params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
     elif model_name == 'CellTypeGNN':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 3)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [128, 256])
-        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [5, 10, 15])
+        params['n_layers'] = trial.suggest_int('n_layers', 1,2, 3)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64,128, 256, 512])
+        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [3,4,5,6,7,8,9,10])
 
     return params
 
@@ -503,7 +503,7 @@ def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
     data = build_graph_data(data_dir, k_neighbors=k_neighbors).to(DEVICE)
 
     # Build model with best architectural params
-    model_kw = dict(dropout=dropout, hidden_dim=256*2)
+    model_kw = dict(dropout=dropout)
     for k in ('n_layers', 'hidden_dim'):
         if k in bp:
             model_kw[k] = bp[k]
