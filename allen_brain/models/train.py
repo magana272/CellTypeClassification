@@ -72,8 +72,8 @@ class _GPULoader:
         self.shuffle = shuffle
         self.drop_last = drop_last
         self.device = device
-        X = np.asarray(dataset.X, dtype=np.float32)
-        y = np.asarray(dataset.y, dtype=np.int64)
+        X = np.array(dataset.X, dtype=np.float32, copy=True)
+        y = np.array(dataset.y, dtype=np.int64, copy=True)
         self.X = torch.from_numpy(X).unsqueeze(1).to(device)
         self.y = torch.from_numpy(y).to(device)
 
@@ -294,7 +294,7 @@ def train_graph(model, data, criterion, optimizer, scheduler, epochs, writer, ck
             no_improve += 1
         lr = scheduler.get_last_lr()[0]
         print_row(epoch, tr_loss, tr_acc, vl_loss, vl_acc, lr, ' *' if improved else '')
-        log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc, lr=lr)
+        log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
         if trial is not None:
             trial.report(vl_acc, epoch)
             if trial.should_prune():
