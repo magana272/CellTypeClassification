@@ -10,7 +10,7 @@ from allen_brain.models import train as T
 torch.set_float32_matmul_precision('high')
 SEED = 42
 BATCH_SIZE = 4096//4
-N_HVG = 2000
+N_HVG = 0
 
 DATA_DIR = 'data/smartseq'
 GMT_PATH = 'data/reactome.gmt'
