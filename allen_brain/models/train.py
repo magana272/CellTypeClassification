@@ -58,12 +58,14 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     return best
 
 
-class _GPULoader:
-    """Preloaded on-GPU replacement for DataLoader on small tabular datasets.
+class _PinnedLoader:
+    """Replaces DataLoader: preloads the full matrix into pinned host RAM and
+    issues a single non-blocking H2D copy per batch.
 
-    Why: for ~2k HVG gene expression, the whole matrix is a few GB and fits on
-    the A100. Doing host->device copy per batch is the dominant cost; preloading
-    once and slicing with cuda indices makes an epoch GPU-bound.
+    Why not GPU-side preload: at 50k features + 67k cells the dataset alone is
+    ~13 GB on device, which starves model activations during Optuna trials.
+    Pinned host memory keeps the per-batch transfer cheap and async without
+    locking GPU memory that the model needs.
     """
 
     def __init__(self, dataset, batch_size, shuffle, drop_last, device):
@@ -74,8 +76,13 @@ class _GPULoader:
         self.device = device
         X = np.array(dataset.X, dtype=np.float32, copy=True)
         y = np.array(dataset.y, dtype=np.int64, copy=True)
-        self.X = torch.from_numpy(X).unsqueeze(1).to(device)
-        self.y = torch.from_numpy(y).to(device)
+        X_t = torch.from_numpy(X).unsqueeze(1)
+        y_t = torch.from_numpy(y)
+        if device.type == 'cuda':
+            X_t = X_t.pin_memory()
+            y_t = y_t.pin_memory()
+        self.X = X_t
+        self.y = y_t
 
     def __len__(self):
         n = self.X.shape[0]
@@ -83,20 +90,23 @@ class _GPULoader:
 
     def __iter__(self):
         n = self.X.shape[0]
-        idx = torch.randperm(n, device=self.device) if self.shuffle else torch.arange(n, device=self.device)
+        idx = torch.randperm(n) if self.shuffle else torch.arange(n)
         bs = self.batch_size
         end = (n // bs) * bs if self.drop_last else n
+        non_blocking = self.device.type == 'cuda'
         for i in range(0, end, bs):
             sel = idx[i:i + bs]
-            yield self.X[sel], self.y[sel]
+            xb = self.X[sel].to(self.device, non_blocking=non_blocking)
+            yb = self.y[sel].to(self.device, non_blocking=non_blocking)
+            yield xb, yb
 
 
 def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE):
     ds = make_dataset(data_dir, split='train')
     ds_val = make_dataset(data_dir, split='val')
-    train_loader = _GPULoader(ds, batch_size, shuffle=True,
+    train_loader = _PinnedLoader(ds, batch_size, shuffle=True,
                               drop_last=drop_last_train, device=device)
-    val_loader = _GPULoader(ds_val, batch_size, shuffle=False,
+    val_loader = _PinnedLoader(ds_val, batch_size, shuffle=False,
                             drop_last=False, device=device)
     print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes (preloaded to {device})')
     print(f'val:   {len(ds_val)} cells')
@@ -355,7 +365,7 @@ def train_graph_with_tuning(cfg, data, n_features, n_classes, weights,
 
 
 def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
-          device=DEVICE, squeeze_channel=False, patience=15, compile_model=True,
+          device=DEVICE, squeeze_channel=False, patience=15, compile_model=False,
           trial=None):
     if compile_model and device.type == 'cuda':
         model = torch.compile(model)
