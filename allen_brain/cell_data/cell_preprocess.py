@@ -65,3 +65,26 @@ def preprocess_hvg(
     X_test = scaler.transform(X_test).astype(np.float32)
 
     return X_train, X_val, X_test, gene_names[hvg_gene_idx], scaler
+
+
+def align_genes(X_source, gene_names_source, gene_names_target):
+    """Reindex X_source columns to match gene_names_target order.
+
+    Genes in target but missing from source get zero-filled.
+    Genes in source but missing from target are dropped.
+
+    Returns X_aligned (n_samples, len(gene_names_target)) and overlap count.
+    """
+    source_map = {g: i for i, g in enumerate(gene_names_source)}
+    n_samples = X_source.shape[0]
+    n_target = len(gene_names_target)
+    X_aligned = np.zeros((n_samples, n_target), dtype=np.float32)
+    matched = 0
+    for j, gene in enumerate(gene_names_target):
+        src_idx = source_map.get(gene)
+        if src_idx is not None:
+            X_aligned[:, j] = X_source[:, src_idx]
+            matched += 1
+    print(f'Gene alignment: {matched}/{n_target} target genes matched '
+          f'({n_target - matched} zero-filled)')
+    return X_aligned, matched

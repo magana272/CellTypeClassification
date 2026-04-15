@@ -1,6 +1,7 @@
-"""Shared training utilities: dataloaders, class weights, epoch loop, checkpointing."""
+"""Shared training utilities: dataloaders, class weights, epoch loop, checkpointing, evaluation."""
 
 import gc
+import os
 
 import numpy as np
 import pandas as pd
@@ -10,14 +11,41 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from alive_progress import alive_bar
 import optuna
+from sklearn.metrics import (
+    f1_score, precision_score, recall_score,
+    confusion_matrix, classification_report,
+)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from allen_brain.cell_data.cell_dataset import GeneExpressionDataset, make_dataset
 from allen_brain.cell_data.cell_preprocess import select_hvg
 from allen_brain.models import get_model
-
-import os
+from allen_brain.models.losses import build_criterion
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+_OPTIMIZERS = {'adamw': optim.AdamW, 'adam': optim.Adam, 'sgd': optim.SGD}
+
+
+def _resolve_optimizer(name_or_cls):
+    """Resolve optimizer string or class to a class."""
+    if isinstance(name_or_cls, str):
+        return _OPTIMIZERS[name_or_cls]
+    return name_or_cls
+
+
+def count_parameters(model):
+    """Count trainable parameters in a model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def estimate_vram(model, batch_size, n_features):
+    """Rough lower-bound VRAM estimate (bytes) for training a model."""
+    param_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    activation_bytes = batch_size * n_features * 4
+    return param_bytes + activation_bytes
 
 
 def build_model(model_name: str, n_features: int, n_classes: int, device=DEVICE, **kwargs):
@@ -30,46 +58,84 @@ def build_model(model_name: str, n_features: int, n_classes: int, device=DEVICE,
 def make_writer_and_ckpt(cfg, n_features):
     run_name = make_run_name(cfg['model'], n_features, cfg['batch_size'],
                              cfg['epochs'], cfg['lr'], cfg['weight_decay'])
-    writer = SummaryWriter(log_dir=f'runs/{cfg["model"]}/{run_name}')
-    return writer, f'best_model_{run_name}.pt'
+    log_dir = f'runs/{cfg["model"]}/{run_name}'
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
+    return writer, os.path.join(log_dir, 'best_model.pt')
 
 
 
 
 def train_with_tuning(cfg, data_dir, squeeze_channel,
-                      make_builder=None, n_trials=15, tune_epochs=5,
-                      tune_batch_size=None):
-    train_loader, val_loader = make_dataloaders(data_dir, cfg['batch_size'], n_hvg=cfg.get('n_hvg'))
+                      n_trials=15, tune_epochs=5,
+                      n_hvg_range=None, extra_model_kwargs=None):
+    train_loader, val_loader, hvg_idx = make_dataloaders(
+        data_dir, cfg['batch_size'], n_hvg=cfg.get('n_hvg'))
     loaders = (train_loader, val_loader)
-    builder =  lambda: build_model(cfg['model'], len(train_loader.dataset.gene_names), train_loader.dataset.n_classes)
-    best_params = run_hparam_search(cfg, builder, train_loader.dataset, loaders, squeeze_channel,
-                                    n_trials=n_trials, tune_epochs=tune_epochs)
-    if best_params is not None:
-        cfg['lr'] = best_params['lr']
-        cfg['weight_decay'] = best_params['weight_decay']
-    model = builder()
-    criterion = cfg['loss'](weight=class_weights(train_loader.dataset), label_smoothing=0.1)
+    ds = train_loader.dataset
+
+    best_params = run_hparam_search(
+        cfg, ds, loaders, squeeze_channel,
+        n_trials=n_trials, tune_epochs=tune_epochs,
+        data_dir=data_dir, n_hvg_range=n_hvg_range,
+        extra_model_kwargs=extra_model_kwargs)
+
+    # Apply best params (fall back to cfg defaults)
+    bp = best_params or {}
+    lr = bp.get('lr', cfg['lr'])
+    wd = bp.get('weight_decay', cfg['weight_decay'])
+    opt_name = bp.get('optimizer', cfg.get('optimizer', 'adamw'))
+    loss_name = bp.get('loss', cfg.get('loss', 'cross_entropy'))
+    label_smoothing = bp.get('label_smoothing', cfg.get('label_smoothing', 0.1))
+    focal_gamma = bp.get('focal_gamma', cfg.get('focal_gamma', 2.0))
+    dropout = bp.get('dropout', cfg.get('dropout', 0.1))
+
+    # Rebuild dataloaders if n_hvg was tuned
+    if 'n_hvg' in bp:
+        cfg['n_hvg'] = bp['n_hvg']
+        train_loader, val_loader, hvg_idx = make_dataloaders(
+            data_dir, cfg['batch_size'], n_hvg=cfg['n_hvg'])
+        loaders = (train_loader, val_loader)
+        ds = train_loader.dataset
+
+    # Build model with best architectural params
+    model_kw = dict(dropout=dropout)
+    for k in ('n_layers', 'hidden_dim', 'n_stages', 'n_heads', 'embed_dim'):
+        if k in bp:
+            model_kw[k] = bp[k]
+    if extra_model_kwargs:
+        model_kw.update(extra_model_kwargs)
+    model = build_model(cfg['model'], len(ds.gene_names), ds.n_classes, **model_kw)
+
+    criterion = build_criterion(loss_name, weight=class_weights(ds),
+                                label_smoothing=label_smoothing, gamma=focal_gamma)
     optimizer, scheduler = build_optimizer(
-        model, cfg['lr'], cfg['weight_decay'], cfg['epochs'], opt_cls=cfg['optimizer'])
-    writer, ckpt = make_writer_and_ckpt(cfg, len(train_loader.dataset.gene_names))
+        model, lr, wd, cfg['epochs'], opt_cls=opt_name)
+    writer, ckpt = make_writer_and_ckpt(cfg, len(ds.gene_names))
+
+    # Save HVG indices alongside checkpoint for evaluation
+    if hvg_idx is not None:
+        np.save(os.path.join(os.path.dirname(ckpt), 'hvg_indices.npy'), hvg_idx)
+
     print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
     print_header()
     best = train(model, loaders, criterion, optimizer, scheduler,
                  cfg['epochs'], writer, ckpt, squeeze_channel=squeeze_channel)
     print(f'\nBest validation accuracy: {best:.4f}')
-    return best
+    return best, ckpt
 
 
 def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE, n_hvg=None):
     ds = make_dataset(data_dir, split='train')
     ds_val = make_dataset(data_dir, split='val')
+    hvg_idx = None
     if n_hvg is not None and 0 < n_hvg < len(ds.gene_names):
         print(f'Selecting top {n_hvg} HVGs by variance on train split...')
-        top_idx = np.sort(select_hvg(np.asarray(ds.X), n_hvg))
-        ds.X = np.asarray(ds.X[:, top_idx])
-        ds_val.X = np.asarray(ds_val.X[:, top_idx])
-        ds.gene_names = ds.gene_names[top_idx]
-        ds_val.gene_names = ds_val.gene_names[top_idx]
+        hvg_idx = np.sort(select_hvg(np.asarray(ds.X), n_hvg))
+        ds.X = np.asarray(ds.X[:, hvg_idx])
+        ds_val.X = np.asarray(ds_val.X[:, hvg_idx])
+        ds.gene_names = ds.gene_names[hvg_idx]
+        ds_val.gene_names = ds_val.gene_names[hvg_idx]
 
     pin = device.type == 'cuda'
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
@@ -78,7 +144,7 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE, 
                             drop_last=False, pin_memory=pin)
     print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes')
     print(f'val:   {len(ds_val)} cells')
-    return train_loader, val_loader
+    return train_loader, val_loader, hvg_idx
 
 
 def class_weights(ds: GeneExpressionDataset, device=DEVICE):
@@ -88,7 +154,11 @@ def class_weights(ds: GeneExpressionDataset, device=DEVICE):
 
 
 def build_optimizer(model, lr, weight_decay, epochs, opt_cls=optim.AdamW):
-    optimizer = opt_cls(model.parameters(), lr=lr, weight_decay=weight_decay)
+    opt_cls = _resolve_optimizer(opt_cls)
+    kwargs = dict(lr=lr, weight_decay=weight_decay)
+    if opt_cls is optim.SGD:
+        kwargs.update(momentum=0.9, nesterov=True)
+    optimizer = opt_cls(model.parameters(), **kwargs)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     return optimizer, scheduler
 
@@ -179,10 +249,59 @@ def suggest_lr_wd(trial):
     return lr, wd
 
 
+def suggest_hparams(trial, model_name):
+    """Suggest all hyperparameters for a given model type."""
+    lr, wd = suggest_lr_wd(trial)
+    params = dict(lr=lr, weight_decay=wd)
+
+    # Shared across all models
+    params['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
+    params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.2)
+    params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam', 'sgd'])
+    params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
+    if params['loss'] == 'focal':
+        params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.5, 5.0)
+    else:
+        params['focal_gamma'] = 2.0
+
+    # Model-specific architectural params
+    if model_name == 'CellTypeMLP':
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 4)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [128, 256, 512])
+    elif model_name == 'CellTypeCNN':
+        params['n_stages'] = trial.suggest_int('n_stages', 2, 5)
+    elif model_name == 'CellTypeTOSICA':
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 4)
+        params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
+        params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
+    elif model_name == 'CellTypeGNN':
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 4)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [128, 256, 512])
+        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [5, 10, 15, 20, 25])
+
+    return params
+
+
+def _model_kwargs_from_params(params, model_name):
+    """Extract model constructor kwargs from suggested params dict."""
+    kw = dict(dropout=params['dropout'])
+    if model_name == 'CellTypeMLP':
+        kw.update(n_layers=params['n_layers'], hidden_dim=params['hidden_dim'])
+    elif model_name == 'CellTypeCNN':
+        kw['n_stages'] = params['n_stages']
+    elif model_name == 'CellTypeTOSICA':
+        kw.update(n_layers=params['n_layers'], n_heads=params['n_heads'],
+                  embed_dim=params['embed_dim'])
+    elif model_name == 'CellTypeGNN':
+        kw.update(n_layers=params['n_layers'], hidden_dim=params['hidden_dim'])
+    return kw
+
+
 def _tune_writer_ckpt(cfg, trial_number):
-    writer = SummaryWriter(log_dir=f'runs/{cfg["model"]}/tune/trial_{trial_number}')
-    ckpt = f'tune_ckpt_{cfg["model"]}_t{trial_number}.pt'
-    return writer, ckpt
+    log_dir = f'runs/{cfg["model"]}/tune/trial_{trial_number}'
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
+    return writer, os.path.join(log_dir, 'best_model.pt')
 
 
 def run_optuna_study(cfg, objective, n_trials, tune_epochs):
@@ -210,42 +329,54 @@ def _cuda_cleanup():
         torch.cuda.empty_cache()
 
 
-def run_hparam_search(cfg, build_model_fn, ds, loaders, squeeze_channel,
+def run_hparam_search(cfg, ds, loaders, squeeze_channel,
                       n_trials=15, tune_epochs=5,
-                      data_dir=None, n_hvg_range=None):
-    """Optuna hparam search over lr, weight_decay, and optionally n_hvg.
+                      data_dir=None, n_hvg_range=None,
+                      extra_model_kwargs=None):
+    """Optuna hparam search over all hyperparameters.
 
     Parameters
     ----------
     n_hvg_range : tuple (min, max, step), optional
-        When provided, n_hvg is tuned alongside lr/wd.  *data_dir* must also
-        be given so that dataloaders can be rebuilt for each candidate n_hvg.
+        When provided, n_hvg is tuned alongside other params.
+    extra_model_kwargs : dict, optional
+        Extra kwargs forwarded to build_model (e.g. mask, n_pathways for TOSICA).
     """
     default_weights = class_weights(ds)
+    extra_kw = extra_model_kwargs or {}
 
     def objective(trial):
         model = optimizer = scheduler = writer = None
         trial_loaders = loaders
         try:
-            lr, wd = suggest_lr_wd(trial)
+            params = suggest_hparams(trial, cfg['model'])
+            model_kw = _model_kwargs_from_params(params, cfg['model'])
+            model_kw.update(extra_kw)
 
             if n_hvg_range is not None:
                 n_hvg = trial.suggest_int(
                     'n_hvg', n_hvg_range[0], n_hvg_range[1],
                     step=n_hvg_range[2])
-                trial_loaders = make_dataloaders(
+                tl, vl, _ = make_dataloaders(
                     data_dir, cfg['batch_size'], n_hvg=n_hvg)
-                trial_ds = trial_loaders[0].dataset
+                trial_loaders = (tl, vl)
+                trial_ds = tl.dataset
                 n_feat = len(trial_ds.gene_names)
-                model = build_model(cfg['model'], n_feat, trial_ds.n_classes)
+                model = build_model(cfg['model'], n_feat, trial_ds.n_classes,
+                                    **model_kw)
                 w = class_weights(trial_ds)
             else:
-                model = build_model_fn()
+                n_feat = len(ds.gene_names)
+                model = build_model(cfg['model'], n_feat, ds.n_classes,
+                                    **model_kw)
                 w = default_weights
 
-            criterion = nn.CrossEntropyLoss(weight=w, label_smoothing=0.1)
+            criterion = build_criterion(params['loss'], weight=w,
+                                        label_smoothing=params['label_smoothing'],
+                                        gamma=params['focal_gamma'])
             optimizer, scheduler = build_optimizer(
-                model, lr, wd, tune_epochs, opt_cls=cfg['optimizer'])
+                model, params['lr'], params['weight_decay'], tune_epochs,
+                opt_cls=params['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
             return train(model, trial_loaders, criterion, optimizer, scheduler,
                          tune_epochs, writer, ckpt, squeeze_channel=squeeze_channel,
@@ -308,16 +439,32 @@ def train_graph(model, data, criterion, optimizer, scheduler, epochs, writer, ck
     return best_acc
 
 
-def run_graph_hparam_search(cfg, build_model_fn, data, weights,
+def run_graph_hparam_search(cfg, data_dir, n_features, n_classes, weights,
                             n_trials=15, tune_epochs=30):
+    from allen_brain.models.CellTypeGNN import build_graph_data
+    graph_cache = {}
+
+    def _get_graph(k):
+        if k not in graph_cache:
+            graph_cache[k] = build_graph_data(data_dir, k_neighbors=k).to(DEVICE)
+        return graph_cache[k]
+
     def objective(trial):
         model = optimizer = scheduler = writer = None
         try:
-            lr, wd = suggest_lr_wd(trial)
-            model = build_model_fn()
-            criterion = cfg['loss'](weight=weights, label_smoothing=0.1)
+            params = suggest_hparams(trial, 'CellTypeGNN')
+            k = params['k_neighbors']
+            data = _get_graph(k)
+
+            model_kw = _model_kwargs_from_params(params, 'CellTypeGNN')
+            model = build_model('CellTypeGNN', n_features, n_classes, **model_kw)
+
+            criterion = build_criterion(params['loss'], weight=weights,
+                                        label_smoothing=params['label_smoothing'],
+                                        gamma=params['focal_gamma'])
             optimizer, scheduler = build_optimizer(
-                model, lr, wd, tune_epochs, opt_cls=cfg['optimizer'])
+                model, params['lr'], params['weight_decay'], tune_epochs,
+                opt_cls=params['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
             return train_graph(model, data, criterion, optimizer, scheduler,
                                tune_epochs, writer, ckpt, patience=tune_epochs,
@@ -331,22 +478,44 @@ def run_graph_hparam_search(cfg, build_model_fn, data, weights,
             del model, optimizer, scheduler, writer
             _cuda_cleanup()
 
-    return run_optuna_study(cfg, objective, n_trials, tune_epochs)
+    result = run_optuna_study(cfg, objective, n_trials, tune_epochs)
+    graph_cache.clear()
+    return result
 
 
-def train_graph_with_tuning(cfg, data, n_features, n_classes, weights,
-                            build_model_fn=None, n_trials=15, tune_epochs=30):
-    if build_model_fn is None:
-        build_model_fn = lambda: build_model(cfg['model'], n_features, n_classes)
-    best_params = run_graph_hparam_search(cfg, build_model_fn, data, weights,
-                                          n_trials=n_trials, tune_epochs=tune_epochs)
-    if best_params is not None:
-        cfg['lr'] = best_params['lr']
-        cfg['weight_decay'] = best_params['weight_decay']
-    model = build_model_fn()
-    criterion = cfg['loss'](weight=weights, label_smoothing=0.1)
+def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
+                            n_trials=15, tune_epochs=30):
+    from allen_brain.models.CellTypeGNN import build_graph_data
+
+    best_params = run_graph_hparam_search(
+        cfg, data_dir, n_features, n_classes, weights,
+        n_trials=n_trials, tune_epochs=tune_epochs)
+
+    # Apply best params (fall back to cfg defaults)
+    bp = best_params or {}
+    lr = bp.get('lr', cfg['lr'])
+    wd = bp.get('weight_decay', cfg['weight_decay'])
+    opt_name = bp.get('optimizer', cfg.get('optimizer', 'adamw'))
+    loss_name = bp.get('loss', cfg.get('loss', 'cross_entropy'))
+    label_smoothing = bp.get('label_smoothing', cfg.get('label_smoothing', 0.1))
+    focal_gamma = bp.get('focal_gamma', cfg.get('focal_gamma', 2.0))
+    dropout = bp.get('dropout', cfg.get('dropout', 0.3))
+    k_neighbors = bp.get('k_neighbors', cfg.get('k_neighbors', 15))
+
+    # Build graph with best k
+    data = build_graph_data(data_dir, k_neighbors=k_neighbors).to(DEVICE)
+
+    # Build model with best architectural params
+    model_kw = dict(dropout=dropout)
+    for k in ('n_layers', 'hidden_dim'):
+        if k in bp:
+            model_kw[k] = bp[k]
+    model = build_model('CellTypeGNN', n_features, n_classes, **model_kw)
+
+    criterion = build_criterion(loss_name, weight=weights,
+                                label_smoothing=label_smoothing, gamma=focal_gamma)
     optimizer, scheduler = build_optimizer(
-        model, cfg['lr'], cfg['weight_decay'], cfg['epochs'], opt_cls=cfg['optimizer'])
+        model, lr, wd, cfg['epochs'], opt_cls=opt_name)
     writer, ckpt = make_writer_and_ckpt(cfg, n_features)
     print(f'\nData: {data}')
     print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
@@ -354,7 +523,7 @@ def train_graph_with_tuning(cfg, data, n_features, n_classes, weights,
     best = train_graph(model, data, criterion, optimizer, scheduler,
                        cfg['epochs'], writer, ckpt)
     print(f'\nBest validation accuracy: {best:.4f}')
-    return best
+    return best, ckpt, bp
 
 
 def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
@@ -386,3 +555,131 @@ def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
             if no_improve >= patience:
                 break
     return best_acc
+
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
+def _save_confusion_matrix(cm, class_names, save_path):
+    """Save a confusion matrix heatmap as a PNG."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names, ax=ax)
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('True')
+    ax.set_title('Confusion Matrix')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved confusion matrix to {save_path}')
+
+
+def _collect_predictions(model, loader, squeeze_channel=False, device=DEVICE):
+    """Run inference and collect all predictions and labels."""
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for xb, yb in loader:
+            xb, yb = prep_batch(xb, yb, squeeze_channel, device)
+            with _autocast(xb):
+                logits = model(xb)
+            all_preds.append(logits.argmax(1).cpu())
+            all_labels.append(yb.cpu())
+    return torch.cat(all_preds).numpy(), torch.cat(all_labels).numpy()
+
+
+def _compute_metrics(y_true, y_pred, class_names, save_dir=None):
+    """Compute full classification metrics and optionally save confusion matrix."""
+    acc = (y_pred == y_true).mean()
+    metrics = {
+        'accuracy': acc,
+        'f1_macro': f1_score(y_true, y_pred, average='macro', zero_division=0),
+        'f1_weighted': f1_score(y_true, y_pred, average='weighted', zero_division=0),
+        'precision_macro': precision_score(y_true, y_pred, average='macro', zero_division=0),
+        'precision_weighted': precision_score(y_true, y_pred, average='weighted', zero_division=0),
+        'recall_macro': recall_score(y_true, y_pred, average='macro', zero_division=0),
+        'recall_weighted': recall_score(y_true, y_pred, average='weighted', zero_division=0),
+    }
+    cm = confusion_matrix(y_true, y_pred)
+    metrics['confusion_matrix'] = cm
+
+    print('\n' + '=' * 60)
+    print('EVALUATION RESULTS')
+    print('=' * 60)
+    report = classification_report(y_true, y_pred, target_names=class_names,
+                                   zero_division=0)
+    print(report)
+    print(f'Accuracy: {acc:.4f}')
+    print(f'F1 (macro): {metrics["f1_macro"]:.4f}  F1 (weighted): {metrics["f1_weighted"]:.4f}')
+    print(f'Precision (macro): {metrics["precision_macro"]:.4f}  '
+          f'Precision (weighted): {metrics["precision_weighted"]:.4f}')
+    print(f'Recall (macro): {metrics["recall_macro"]:.4f}  '
+          f'Recall (weighted): {metrics["recall_weighted"]:.4f}')
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        _save_confusion_matrix(cm, class_names,
+                               os.path.join(save_dir, 'confusion_matrix.png'))
+    return metrics
+
+
+def evaluate(cfg, data_dir, ckpt_path, squeeze_channel=False,
+             extra_model_kwargs=None):
+    """Load best checkpoint and evaluate on test set with full metrics.
+
+    Returns dict with accuracy, f1, precision, recall, confusion_matrix.
+    """
+    ds_test = make_dataset(data_dir, split='test')
+
+    # Apply HVG indices if saved during training
+    hvg_path = os.path.join(os.path.dirname(ckpt_path), 'hvg_indices.npy')
+    if os.path.exists(hvg_path):
+        hvg_idx = np.load(hvg_path)
+        ds_test.X = np.asarray(ds_test.X[:, hvg_idx])
+        ds_test.gene_names = ds_test.gene_names[hvg_idx]
+        print(f'Applied HVG selection: {len(hvg_idx)} genes')
+
+    n_features = len(ds_test.gene_names)
+    n_classes = ds_test.n_classes
+    class_names = list(ds_test.class_names)
+
+    extra_kw = extra_model_kwargs or {}
+    model = build_model(cfg['model'], n_features, n_classes, **extra_kw)
+
+    model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
+    print(f'Loaded checkpoint: {ckpt_path}')
+
+    pin = DEVICE.type == 'cuda'
+    test_loader = DataLoader(ds_test, batch_size=cfg['batch_size'],
+                             shuffle=False, pin_memory=pin)
+
+    y_pred, y_true = _collect_predictions(model, test_loader, squeeze_channel)
+    save_dir = os.path.dirname(ckpt_path)
+    return _compute_metrics(y_true, y_pred, class_names, save_dir)
+
+
+def evaluate_graph(cfg, data, ckpt_path, n_features, n_classes,
+                   class_names=None):
+    """Load best checkpoint and evaluate graph model on test mask with full metrics.
+
+    Returns dict with accuracy, f1, precision, recall, confusion_matrix.
+    """
+    model = build_model(cfg['model'], n_features, n_classes)
+
+    model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
+    print(f'Loaded checkpoint: {ckpt_path}')
+
+    model.eval()
+    with torch.no_grad():
+        logits = model(data.x, data.edge_index)
+
+    mask = data.test_mask
+    y_pred = logits[mask].argmax(1).cpu().numpy()
+    y_true = data.y[mask].cpu().numpy()
+
+    if class_names is None:
+        class_names = [str(i) for i in range(n_classes)]
+
+    save_dir = os.path.dirname(ckpt_path)
+    return _compute_metrics(y_true, y_pred, class_names, save_dir)

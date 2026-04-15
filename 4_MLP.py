@@ -1,10 +1,7 @@
-from torch import nn, optim
-
 from allen_brain.models import train as T
 
-
 SEED = 42
-BATCH_SIZE = 2048//2
+BATCH_SIZE = 2048 // 2
 N_HVG = 0
 DATA_DIR = 'data/10x'
 N_TRIALS = 3
@@ -16,17 +13,20 @@ COFIG = {
     'batch_size': BATCH_SIZE,
     'n_hvg': N_HVG,
     'device': str(T.DEVICE),
-    'optimizer': optim.AdamW,
+    'optimizer': 'adamw',
     'lr': 3e-4,
     'weight_decay': 1e-6,
     'epochs': 20,
-    'loss': nn.CrossEntropyLoss,
+    'loss': 'cross_entropy',
+    'label_smoothing': 0.1,
 }
 
 
 def main():
-    T.train_with_tuning(COFIG, DATA_DIR, squeeze_channel=True,
-                        n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS)
+    best_acc, ckpt = T.train_with_tuning(
+        COFIG, DATA_DIR, squeeze_channel=True,
+        n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS)
+    T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=True)
 
 
 if __name__ == '__main__':

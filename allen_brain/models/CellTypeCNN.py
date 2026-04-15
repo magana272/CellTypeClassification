@@ -20,8 +20,7 @@ class MLP_SEBlock(nn.Module):
         w = self.fc(w).unsqueeze(-1)
         return x * w
 
-    
-    
+
 class ResBlock(nn.Module):
     """Pre-activation residual block: BN -> ReLU -> Conv -> BN -> ReLU -> Conv + SE."""
 
@@ -47,46 +46,50 @@ class ResBlock(nn.Module):
 
 
 class CellTypeCNN(nn.Module):
-    """Residual 1D-CNN with widening channels, SE attention, and dual-pool head."""
+    """Residual 1D-CNN with variable depth, widening channels, SE attention, and dual-pool head."""
 
-    def __init__(self, seq_len: int, n_classes: int, dropout: float = 0.1):
+    def __init__(self, seq_len: int, n_classes: int, dropout: float = 0.1,
+                 n_stages: int = 3):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv1d(1, 32, kernel_size=15, stride=2, padding=7, bias=False),
             nn.BatchNorm1d(32),
             nn.ReLU(),
         )
-        self.stage1 = nn.Sequential(
-            ResBlock(32, 32, kernel=7, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
-        self.stage2 = nn.Sequential(
-            ResBlock(32, 64, kernel=5, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
-        self.stage3 = nn.Sequential(
-            ResBlock(64, 128, kernel=3, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
+
+        # Channel schedule: double every other stage, cap at 256
+        channels = [min(32 * 2 ** (i // 2), 256) for i in range(n_stages)]
+        # Kernel schedule: start at 7, decrease to 3
+        kernels = [max(7 - 2 * i, 3) for i in range(n_stages)]
+
+        stages = []
+        in_ch = 32  # stem output
+        for ch, k in zip(channels, kernels):
+            stages.append(nn.Sequential(
+                ResBlock(in_ch, ch, kernel=k, dropout=dropout),
+                nn.MaxPool1d(3),
+            ))
+            in_ch = ch
+        self.stages = nn.ModuleList(stages)
 
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
         self.max_pool = nn.AdaptiveMaxPool1d(1)
 
+        head_dim = 2 * channels[-1]  # avg + max pool concat
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.LayerNorm(256),
+            nn.LayerNorm(head_dim),
             nn.Dropout(dropout),
-            nn.Linear(256, 128),
+            nn.Linear(head_dim, head_dim // 2),
             nn.ReLU(),
-            nn.LayerNorm(128),
+            nn.LayerNorm(head_dim // 2),
             nn.Dropout(dropout),
-            nn.Linear(128, n_classes),
+            nn.Linear(head_dim // 2, n_classes),
         )
 
     def forward(self, x):
         x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
+        for stage in self.stages:
+            x = stage(x)
         x = torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
         return self.classifier(x)

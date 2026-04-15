@@ -56,6 +56,8 @@ def get_model(
     embed_dim: int = 48,
     n_heads: int = 4,
     n_layers: int = 2,
+    n_stages: int = 3,
+    hidden_dim: int = 256,
     dropout: float = 0.1,
 ) -> torch.nn.Module:
     """
@@ -68,15 +70,24 @@ def get_model(
     n_classes  : number of cell-type classes
     mask       : (n_genes, n_pathways) binary tensor for TOSICA  (optional)
     n_pathways : override pathway count; defaults to n_genes when mask is None
+    n_layers   : depth for MLP, TOSICA, GNN
+    n_stages   : depth for CNN (number of ResBlock stages)
+    hidden_dim : hidden dimension for MLP (default 512) and GNN (default 256)
     """
     if name == "CellTypeCNN":
-        return CellTypeCNN(seq_len=n_genes, n_classes=n_classes, dropout=dropout)
+        return CellTypeCNN(seq_len=n_genes, n_classes=n_classes,
+                           dropout=dropout, n_stages=n_stages)
 
     if name == "CellTypeMLP":
-        return MLP_Model(input_dim=n_genes, n_classes=n_classes, dropout=dropout)
+        return MLP_Model(input_dim=n_genes, n_classes=n_classes,
+                         dropout=dropout, n_layers=n_layers,
+                         hidden_dim=hidden_dim)
 
     if name == "CellTypeGNN":
-        return CellTypeGNN(in_dim=n_genes, hidden_dim=256, n_classes=n_classes, dropout=dropout)
+        return CellTypeGNN(in_dim=n_genes, hidden_dim=hidden_dim,
+                           n_classes=n_classes, dropout=dropout,
+                           n_layers=n_layers)
+
     if name == "CellTypeTOSICA":
         if mask is None:
             n_pw = n_pathways or n_genes
