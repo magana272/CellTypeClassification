@@ -6,7 +6,7 @@ N_HVG = 2000
 N_HVG_RANGE = (500, 5000, 500)
 DATA_DIR = 'data/10x'
 N_TRIALS = 5
-TUNE_EPOCHS = 10
+TUNE_EPOCHS = 30
 
 COFIG = {
     'model': 'CellTypeCNN',

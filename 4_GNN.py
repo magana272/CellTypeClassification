@@ -9,7 +9,7 @@ N_HVG = 0
 DATA_DIR = 'data/10x'
 K_NEIGHBORS = 15
 N_TRIALS = 3
-TUNE_EPOCHS = 20
+TUNE_EPOCHS = 15
 
 COFIG = {
     'model': 'CellTypeGNN',
