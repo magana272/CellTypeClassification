@@ -88,8 +88,10 @@ def _eval_standard_model(model_name, X_aligned, y_eval, gene_names,
     n_classes_train = len(np.load(os.path.join(TRAIN_DIR, 'class_names.npy'),
                                   allow_pickle=True))
 
+    saved_kw = T._load_model_kwargs(ckpt_path)
     extra_kw = extra_model_kwargs or {}
-    model = T.build_model(model_name, n_features, n_classes_train, **extra_kw)
+    saved_kw.update(extra_kw)
+    model = T.build_model(model_name, n_features, n_classes_train, **saved_kw)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=T.DEVICE,
                                      weights_only=True))
