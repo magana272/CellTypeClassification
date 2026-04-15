@@ -7,10 +7,6 @@ from torch import nn
 from torch_geometric.data import Data
 from torch_geometric.nn import SAGEConv
 
-torch.set_float32_matmul_precision('high')
-
-
-
 def load_combined_xy(data_dir):
     """Load all splits into a single pre-allocated X buffer (no vstack copy)."""
     sizes = {}

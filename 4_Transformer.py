@@ -3,7 +3,7 @@ from allen_brain.models.CellTypeAttention import build_pathway_mask
 from allen_brain.cell_data.cell_dataset import make_dataset
 
 SEED = 42
-BATCH_SIZE = 4096 // 4
+BATCH_SIZE = 1024
 N_HVG = 0
 DATA_DIR = 'data/10x'
 GMT_PATH = 'data/reactome.gmt'

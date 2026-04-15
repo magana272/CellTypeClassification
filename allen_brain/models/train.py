@@ -10,7 +10,6 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
-from alive_progress import alive_bar
 import optuna
 from sklearn.metrics import (
     f1_score, precision_score, recall_score,
@@ -190,7 +189,7 @@ def train_batch(model, xb, yb, criterion, optimizer):
 
 
 def run_epoch(model, loader, criterion, optimizer,
-              train=True, squeeze_channel=False, on_batch=None):
+              train=True, squeeze_channel=False):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     ctx = torch.enable_grad() if train else torch.no_grad()
@@ -206,8 +205,6 @@ def run_epoch(model, loader, criterion, optimizer,
             total_loss += loss.item() * len(yb)
             correct    += (logits.argmax(1) == yb).sum().item()
             total      += len(yb)
-            if on_batch is not None:
-                on_batch()
     return total_loss / total, correct / total
 
 
@@ -233,14 +230,12 @@ def make_run_name(model_name, n_hvg, batch_size, epochs, lr, wd):
 
 
 def _step_epoch(model, loaders, criterion, optimizer, scheduler,
-                squeeze_channel, on_batch=None):
+                squeeze_channel):
     train_loader, val_loader = loaders
     tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer,
-                                train=True, squeeze_channel=squeeze_channel,
-                                on_batch=on_batch)
+                                train=True, squeeze_channel=squeeze_channel)
     vl_loss, vl_acc = run_epoch(model, val_loader, criterion, optimizer,
-                                train=False, squeeze_channel=squeeze_channel,
-                                on_batch=on_batch)
+                                train=False, squeeze_channel=squeeze_channel)
     scheduler.step()
     return tr_loss, tr_acc, vl_loss, vl_acc
 
@@ -535,28 +530,27 @@ def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
     if compile_model and device.type == 'cuda':
         model = torch.compile(model)
     best_loss, best_acc, no_improve = float('inf'), 0.0, 0
-    train_loader, val_loader = loaders
-    total_steps = epochs * (len(train_loader) + len(val_loader))
-    with alive_bar(total_steps) as bar:
-        for epoch in range(1, epochs + 1):
-            tr_loss, tr_acc, vl_loss, vl_acc = _step_epoch(
-                model, loaders, criterion, optimizer, scheduler,
-                squeeze_channel, on_batch=bar)
-            if trial is not None:
-                trial.report(vl_acc, epoch)
-                if trial.should_prune():
-                    raise optuna.TrialPruned()
-            improved = vl_loss < best_loss - 1e-4
-            if improved:
-                best_loss, best_acc, no_improve = vl_loss, vl_acc, 0
-                torch.save(model.state_dict(), ckpt)
-            else:
-                no_improve += 1
-            flag = ' *' if improved else ''
-            bar.text(f'ep {epoch}/{epochs} tl={tr_loss:.4f} ta={tr_acc:.4f} vl={vl_loss:.4f} va={vl_acc:.4f}{flag}')
-            log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
-            if no_improve >= patience:
-                break
+    for epoch in range(1, epochs + 1):
+        tr_loss, tr_acc, vl_loss, vl_acc = _step_epoch(
+            model, loaders, criterion, optimizer, scheduler,
+            squeeze_channel)
+        if trial is not None:
+            trial.report(vl_acc, epoch)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+        improved = vl_loss < best_loss - 1e-4
+        if improved:
+            best_loss, best_acc, no_improve = vl_loss, vl_acc, 0
+            torch.save(model.state_dict(), ckpt)
+        else:
+            no_improve += 1
+        flag = ' *' if improved else ''
+        lr = scheduler.get_last_lr()[0]
+        print_row(epoch, tr_loss, tr_acc, vl_loss, vl_acc, lr, flag)
+        log_epoch(writer, epoch, tr_loss, tr_acc, vl_loss, vl_acc)
+        if no_improve >= patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
     return best_acc
 
 
