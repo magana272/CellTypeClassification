@@ -783,7 +783,7 @@ def _collect_probabilities(model, loader, squeeze_channel=False, device=DEVICE):
             xb, yb = prep_batch(xb, yb, squeeze_channel, device)
             with _autocast(xb):
                 logits = model(xb)
-            all_probs.append(F.softmax(logits, dim=1).cpu())
+            all_probs.append(F.softmax(logits, dim=1).float().cpu())
             all_labels.append(yb.cpu())
     return torch.cat(all_probs).numpy(), torch.cat(all_labels).numpy()
 
