@@ -66,6 +66,21 @@ def _load_and_predict(model_cls_name, squeeze_channel, is_graph):
             hvg_idx = np.load(hvg_path)
             ds_test.X = np.asarray(ds_test.X[:, hvg_idx])
             ds_test.gene_names = ds_test.gene_names[hvg_idx]
+        # Apply same normalization used during training
+        import pickle as _pickle
+        _normalize = None
+        _norm_path = os.path.join(os.path.dirname(ckpt), 'normalize.txt')
+        if os.path.exists(_norm_path):
+            with open(_norm_path) as _f:
+                _normalize = _f.read().strip() or None
+        _scaler = None
+        _scaler_path = os.path.join(os.path.dirname(ckpt), 'scaler.pkl')
+        if os.path.exists(_scaler_path):
+            with open(_scaler_path, 'rb') as _f:
+                _scaler = _pickle.load(_f)
+        if _normalize:
+            ds_test.X = T._apply_normalization_test(
+                np.asarray(ds_test.X, dtype=np.float32), _normalize, _scaler)
         n_features = len(ds_test.gene_names)
         model = T.build_model(model_cls_name, n_features, ds_test.n_classes, **saved_kw)
         model.load_state_dict(torch.load(ckpt, map_location=T.DEVICE, weights_only=True))
@@ -140,7 +155,7 @@ def plot_roc_comparison(results, save_dir):
     ax.set_xlabel('False Positive Rate')
     ax.set_ylabel('True Positive Rate')
     ax.set_title('Macro-Average ROC Comparison')
-    ax.legend()
+    ax.legend(loc='lower right', fontsize=9)
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, 'roc_curves_comparison.png'), dpi=150)
     plt.close(fig)
@@ -179,14 +194,15 @@ def plot_confusion_matrices(results, save_dir):
     n = len(results)
     if n == 0:
         return
-    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    fig, axes = plt.subplots(2, 2, figsize=(22, 20))
     axes = axes.flatten()
     for idx, (name, r) in enumerate(results.items()):
         ax = axes[idx]
-        cm = confusion_matrix(r['y_true'], r['y_pred'])
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+        cm = confusion_matrix(r['y_true'], r['y_pred'], normalize='true')
+        sns.heatmap(cm, annot=False, cmap='Blues', vmin=0, vmax=1,
                     xticklabels=r['class_names'], yticklabels=r['class_names'],
                     ax=ax)
+        ax.tick_params(axis='both', labelsize=5)
         ax.set_title(name)
         ax.set_xlabel('Predicted')
         ax.set_ylabel('True')
