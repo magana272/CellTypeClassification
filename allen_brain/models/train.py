@@ -146,6 +146,133 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     return best, ckpt, bp
 
 
+def train_with_grid(cfg, data_dir, squeeze_channel,
+                    grid, tune_epochs, extra_model_kwargs=None):
+    """Deterministic grid search: train each config for tune_epochs, then
+    do full training with the winner.
+
+    Parameters
+    ----------
+    grid : list[dict]
+        Each dict has keys: lr, weight_decay, dropout, label_smoothing,
+        optimizer, loss, focal_gamma, normalize, and model-specific
+        architectural keys (n_layers, hidden_dim, etc.).
+    """
+    extra_kw = extra_model_kwargs or {}
+    best_idx, best_val_acc = 0, -1.0
+    cached_normalize = object()  # sentinel
+    loaders = ds = None
+
+    console.print(f'Grid search: {len(grid)} configs x {tune_epochs} epochs')
+
+    for i, params in enumerate(grid):
+        console.print(Panel(f'[bold]Grid config {i+1}/{len(grid)}[/bold]: {params}',
+                            border_style='cyan'))
+        model = optimizer = scheduler = writer = None
+        try:
+            norm = params.get('normalize', cfg.get('normalize'))
+            if norm == 'none':
+                norm = None
+            n_hvg = params.get('n_hvg', cfg.get('n_hvg'))
+
+            if norm != cached_normalize or loaders is None:
+                train_loader, val_loader, _, _ = make_dataloaders(
+                    data_dir, cfg['batch_size'], n_hvg=n_hvg, normalize=norm)
+                loaders = (train_loader, val_loader)
+                ds = train_loader.dataset
+                cached_normalize = norm
+
+            model_kw = _model_kwargs_from_params(params, cfg['model'])
+            model_kw.update(extra_kw)
+
+            model = build_model(cfg['model'], len(ds.gene_names), ds.n_classes,
+                                **model_kw)
+            w = class_weights(ds)
+            criterion = build_criterion(
+                params.get('loss', cfg.get('loss', 'cross_entropy')),
+                weight=w,
+                label_smoothing=params.get('label_smoothing', 0.1),
+                gamma=params.get('focal_gamma', 2.0))
+            optimizer, scheduler = build_optimizer(
+                model, params['lr'], params['weight_decay'],
+                tune_epochs, opt_cls=params.get('optimizer', 'adamw'))
+            writer, ckpt = _tune_writer_ckpt(cfg, i)
+
+            accum = cfg.get('accumulation_steps', 1)
+            print_header()
+            val_acc = train(model, loaders, criterion, optimizer, scheduler,
+                            tune_epochs, writer, ckpt,
+                            squeeze_channel=squeeze_channel,
+                            accumulation_steps=accum)
+
+            console.print(f'Config {i+1} val_acc: [bold]{val_acc:.4f}[/bold]')
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_idx = i
+        finally:
+            if writer is not None:
+                writer.close()
+            del model, optimizer, scheduler, writer
+            _cuda_cleanup()
+
+    # --- Phase 2: full training with winner ---
+    bp = grid[best_idx]
+    console.print(Panel(f'[bold green]Winner: config {best_idx+1}[/bold green] '
+                        f'(val_acc={best_val_acc:.4f})\n{bp}',
+                        border_style='green'))
+
+    lr = bp.get('lr', cfg['lr'])
+    wd = bp.get('weight_decay', cfg['weight_decay'])
+    opt_name = bp.get('optimizer', cfg.get('optimizer', 'adamw'))
+    loss_name = bp.get('loss', cfg.get('loss', 'cross_entropy'))
+    label_smoothing = bp.get('label_smoothing', cfg.get('label_smoothing', 0.1))
+    focal_gamma = bp.get('focal_gamma', cfg.get('focal_gamma', 2.0))
+    dropout = bp.get('dropout', cfg.get('dropout', 0.1))
+    normalize = bp.get('normalize', cfg.get('normalize'))
+    if normalize == 'none':
+        normalize = None
+
+    best_n_hvg = bp.get('n_hvg', cfg.get('n_hvg'))
+    train_loader, val_loader, hvg_idx, scaler = make_dataloaders(
+        data_dir, cfg['batch_size'], n_hvg=best_n_hvg, normalize=normalize)
+    loaders = (train_loader, val_loader)
+    ds = train_loader.dataset
+
+    model_kw = dict(dropout=dropout)
+    for k in ('n_layers', 'hidden_dim', 'n_stages', 'n_heads', 'embed_dim'):
+        if k in bp:
+            model_kw[k] = bp[k]
+    if extra_model_kwargs:
+        model_kw.update(extra_model_kwargs)
+    model = build_model(cfg['model'], len(ds.gene_names), ds.n_classes, **model_kw)
+
+    criterion = build_criterion(loss_name, weight=class_weights(ds),
+                                label_smoothing=label_smoothing, gamma=focal_gamma)
+    optimizer, scheduler = build_optimizer(
+        model, lr, wd, cfg['epochs'], opt_cls=opt_name)
+    writer, ckpt = make_writer_and_ckpt(cfg, len(ds.gene_names))
+
+    ckpt_dir = os.path.dirname(ckpt)
+    if hvg_idx is not None:
+        np.save(os.path.join(ckpt_dir, 'hvg_indices.npy'), hvg_idx)
+    if scaler is not None:
+        with open(os.path.join(ckpt_dir, 'scaler.pkl'), 'wb') as f:
+            pickle.dump(scaler, f)
+    if normalize:
+        with open(os.path.join(ckpt_dir, 'normalize.txt'), 'w') as f:
+            f.write(normalize)
+    _save_model_kwargs(ckpt_dir, model_kw)
+
+    console.print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
+    print_header()
+    accum = cfg.get('accumulation_steps', 1)
+    best = train(model, loaders, criterion, optimizer, scheduler,
+                 cfg['epochs'], writer, ckpt, squeeze_channel=squeeze_channel,
+                 accumulation_steps=accum)
+    console.print(f'\nBest validation accuracy: [bold green]{best:.4f}[/bold green]')
+    return best, ckpt, bp
+
+
 def _log_normalize(X: np.ndarray) -> np.ndarray:
     """Library-size normalize + log1p: log1p(X / lib_size * 1e4)."""
     X = np.asarray(X, dtype=np.float32)
