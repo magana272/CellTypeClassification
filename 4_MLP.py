@@ -5,7 +5,7 @@ BATCH_SIZE = 24576 * 2
 N_HVG = 0
 DATA_DIR = 'data/10x'
 N_TRIALS = 10
-TUNE_EPOCHS = 50
+TUNE_EPOCHS = 20
 
 COFIG = {
     'model': 'CellTypeMLP',
