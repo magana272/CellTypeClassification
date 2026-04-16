@@ -362,9 +362,9 @@ def suggest_hparams(trial, model_name):
         params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
         params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
     elif model_name == 'CellTypeGNN':
-        params['n_layers'] = trial.suggest_int('n_layers', 1,10, step=1)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64,128, 256, 512])
-        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [3,4,5,6,7,8,9,10])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 10, step=1)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64, 128, 256, 512])
+        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [3, 4, 5, 6, 7, 8, 9, 10])
 
     return params
 
