@@ -59,6 +59,7 @@ def get_model(
     n_stages: int = 3,
     hidden_dim: int = 256,
     dropout: float = 0.1,
+    use_checkpointing: bool = False,
 ) -> torch.nn.Module:
     """
     Instantiate a model by name.
@@ -76,7 +77,8 @@ def get_model(
     """
     if name == "CellTypeCNN":
         return CellTypeCNN(seq_len=n_genes, n_classes=n_classes,
-                           dropout=dropout, n_stages=n_stages)
+                           dropout=dropout, n_stages=n_stages,
+                           use_checkpointing=use_checkpointing)
 
     if name == "CellTypeMLP":
         return MLP_Model(input_dim=n_genes, n_classes=n_classes,

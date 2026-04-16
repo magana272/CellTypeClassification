@@ -26,7 +26,7 @@ def select_hvg(X_val_filtered: np.ndarray, n_hvg: int) -> np.ndarray:
 
     Runs on GPU when available; returns a numpy index array.
     """
-    X_t = torch.as_tensor(np.asarray(X_val_filtered), dtype=torch.float64, device=_DEVICE)
+    X_t = torch.tensor(np.array(X_val_filtered, copy=True), dtype=torch.float64, device=_DEVICE)
     lib = X_t.sum(dim=1, keepdim=True).clamp(min=1.0)
     normed = torch.log1p(X_t / lib * 1e4).float()
     var = normed.var(dim=0)

@@ -1,12 +1,13 @@
 from allen_brain.models import train as T
 
 SEED = 42
-BATCH_SIZE = 1024*8
+BATCH_SIZE = 512
+ACCUMULATION_STEPS = 16  # effective batch = 512 * 16 = 8192
 N_HVG = 2000
-N_HVG_RANGE = (500, 5000, 500)
+N_HVG_RANGE = (1000, 3000, 500)
 DATA_DIR = 'data/10x'
-N_TRIALS = 30
-TUNE_EPOCHS = 50
+N_TRIALS = 20
+TUNE_EPOCHS = 20
 
 NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
 
@@ -14,6 +15,7 @@ COFIG = {
     'model': 'CellTypeCNN',
     'seed': SEED,
     'batch_size': BATCH_SIZE,
+    'accumulation_steps': ACCUMULATION_STEPS,
     'n_hvg': N_HVG,
     'device': str(T.DEVICE),
     'optimizer': 'adamw',

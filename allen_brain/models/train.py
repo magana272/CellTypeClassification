@@ -138,8 +138,10 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
 
     console.print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
     print_header()
+    accum = cfg.get('accumulation_steps', 1)
     best = train(model, loaders, criterion, optimizer, scheduler,
-                 cfg['epochs'], writer, ckpt, squeeze_channel=squeeze_channel)
+                 cfg['epochs'], writer, ckpt, squeeze_channel=squeeze_channel,
+                 accumulation_steps=accum)
     console.print(f'\nBest validation accuracy: [bold green]{best:.4f}[/bold green]')
     return best, ckpt, bp
 
@@ -259,22 +261,37 @@ def train_batch(model, xb, yb, criterion, optimizer):
 
 
 def run_epoch(model, loader, criterion, optimizer,
-              train=True, squeeze_channel=False):
+              train=True, squeeze_channel=False, accumulation_steps=1):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     ctx = torch.enable_grad() if train else torch.no_grad()
     with ctx:
-        for xb, yb in loader:
+        if train and accumulation_steps > 1:
+            optimizer.zero_grad(set_to_none=True)
+        for i, (xb, yb) in enumerate(loader):
             xb, yb = prep_batch(xb, yb, squeeze_channel)
             if train:
-                loss, logits = train_batch(model, xb, yb, criterion, optimizer)
+                if accumulation_steps > 1:
+                    with _autocast(xb):
+                        logits = model(xb)
+                        loss = criterion(logits, yb) / accumulation_steps
+                    loss.backward()
+                    if (i + 1) % accumulation_steps == 0 or (i + 1) == len(loader):
+                        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
+                    # Record unscaled loss for metrics
+                    total_loss += loss.item() * accumulation_steps * len(yb)
+                else:
+                    loss, logits = train_batch(model, xb, yb, criterion, optimizer)
+                    total_loss += loss.item() * len(yb)
             else:
                 with _autocast(xb):
                     logits = model(xb)
                     loss = criterion(logits, yb)
-            total_loss += loss.item() * len(yb)
-            correct    += (logits.argmax(1) == yb).sum().item()
-            total      += len(yb)
+                total_loss += loss.item() * len(yb)
+            correct += (logits.argmax(1) == yb).sum().item()
+            total   += len(yb)
     return total_loss / total, correct / total
 
 
@@ -300,10 +317,11 @@ def make_run_name(model_name, n_hvg, batch_size, epochs, lr, wd):
 
 
 def _step_epoch(model, loaders, criterion, optimizer, scheduler,
-                squeeze_channel):
+                squeeze_channel, accumulation_steps=1):
     train_loader, val_loader = loaders
     tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer,
-                                train=True, squeeze_channel=squeeze_channel)
+                                train=True, squeeze_channel=squeeze_channel,
+                                accumulation_steps=accumulation_steps)
     vl_loss, vl_acc = run_epoch(model, val_loader, criterion, optimizer,
                                 train=False, squeeze_channel=squeeze_channel)
     scheduler.step()
@@ -338,7 +356,7 @@ def suggest_hparams(trial, model_name):
         params['n_layers'] = trial.suggest_int('n_layers', 1, 10, step=1)
         params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64, 128, 256, 512])
     elif model_name == 'CellTypeCNN':
-        params['n_stages'] = trial.suggest_int('n_stages', 2, 10, step=1)
+        params['n_stages'] = trial.suggest_int('n_stages', 2, 5, step=1)
     elif model_name == 'CellTypeTOSICA':
         params['n_layers'] = trial.suggest_int('n_layers', 1, 4, step=1)
         params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
@@ -358,6 +376,7 @@ def _model_kwargs_from_params(params, model_name):
         kw.update(n_layers=params['n_layers'], hidden_dim=params['hidden_dim'])
     elif model_name == 'CellTypeCNN':
         kw['n_stages'] = params['n_stages']
+        kw['use_checkpointing'] = True
     elif model_name == 'CellTypeTOSICA':
         kw.update(n_layers=params['n_layers'], n_heads=params['n_heads'],
                   embed_dim=params['embed_dim'])
@@ -456,9 +475,11 @@ def run_hparam_search(cfg, ds, loaders, squeeze_channel,
                 model, params['lr'], params['weight_decay'], tune_epochs,
                 opt_cls=params['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
+            accum = cfg.get('accumulation_steps', 1)
             return train(model, trial_loaders, criterion, optimizer, scheduler,
                          tune_epochs, writer, ckpt, squeeze_channel=squeeze_channel,
-                         compile_model=False, trial=trial)
+                         compile_model=False, trial=trial,
+                         accumulation_steps=accum)
         except torch.cuda.OutOfMemoryError:
             console.print(f'Trial {trial.number}: [yellow]CUDA OOM[/yellow] — pruning')
             raise optuna.TrialPruned()
@@ -614,14 +635,14 @@ def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
 
 def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
           device=DEVICE, squeeze_channel=False, patience=5, compile_model=False,
-          trial=None):
+          trial=None, accumulation_steps=1):
     if compile_model and device.type == 'cuda':
         model = torch.compile(model)
     best_loss, best_acc, no_improve = float('inf'), 0.0, 0
     for epoch in range(1, epochs + 1):
         tr_loss, tr_acc, vl_loss, vl_acc = _step_epoch(
             model, loaders, criterion, optimizer, scheduler,
-            squeeze_channel)
+            squeeze_channel, accumulation_steps=accumulation_steps)
         if trial is not None:
             trial.report(vl_acc, epoch)
             if trial.should_prune():

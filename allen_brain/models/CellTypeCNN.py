@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 class MLP_SEBlock(nn.Module):
@@ -49,8 +50,9 @@ class CellTypeCNN(nn.Module):
     """Residual 1D-CNN with variable depth, widening channels, SE attention, and dual-pool head."""
 
     def __init__(self, seq_len: int, n_classes: int, dropout: float = 0.1,
-                 n_stages: int = 3):
+                 n_stages: int = 3, use_checkpointing: bool = False):
         super().__init__()
+        self.use_checkpointing = use_checkpointing
         self.stem = nn.Sequential(
             nn.Conv1d(1, 32, kernel_size=15, stride=2, padding=7, bias=False),
             nn.BatchNorm1d(32),
@@ -90,6 +92,9 @@ class CellTypeCNN(nn.Module):
     def forward(self, x):
         x = self.stem(x)
         for stage in self.stages:
-            x = stage(x)
+            if self.use_checkpointing and self.training:
+                x = checkpoint(stage, x, use_reentrant=False)
+            else:
+                x = stage(x)
         x = torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
         return self.classifier(x)
