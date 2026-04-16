@@ -325,7 +325,7 @@ def suggest_hparams(trial, model_name):
     params['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
     params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.2)
     params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam', 'sgd'])
-    params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
+    params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal', ])
     if params['loss'] == 'focal':
         params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.5, 5.0)
     else:
@@ -335,16 +335,16 @@ def suggest_hparams(trial, model_name):
 
     # Model-specific architectural params
     if model_name == 'CellTypeMLP':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 4)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [128, 256, 512])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 10, step=1)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64, 128, 256, 512])
     elif model_name == 'CellTypeCNN':
-        params['n_stages'] = trial.suggest_int('n_stages', 2, 5)
+        params['n_stages'] = trial.suggest_int('n_stages', 2, 10, step=1)
     elif model_name == 'CellTypeTOSICA':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 4)
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 4, step=1)
         params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
         params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
     elif model_name == 'CellTypeGNN':
-        params['n_layers'] = trial.suggest_int('n_layers', 1,2, 3)
+        params['n_layers'] = trial.suggest_int('n_layers', 1,10, step=1)
         params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64,128, 256, 512])
         params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [3,4,5,6,7,8,9,10])
 
@@ -492,7 +492,7 @@ def _graph_eval(model, data, criterion, val_mask):
 
 
 def train_graph(model, data, criterion, optimizer, scheduler, epochs, writer, ckpt,
-                patience=20, trial=None):
+                patience=5, trial=None):
     best_loss, best_acc, no_improve = float('inf'), 0.0, 0
     for epoch in range(1, epochs + 1):
         tr_loss, tr_acc = _graph_step(model, data, criterion, optimizer, data.train_mask)
@@ -613,7 +613,7 @@ def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
 
 
 def train(model, loaders, criterion, optimizer, scheduler, epochs, writer, ckpt,
-          device=DEVICE, squeeze_channel=False, patience=15, compile_model=False,
+          device=DEVICE, squeeze_channel=False, patience=5, compile_model=False,
           trial=None):
     if compile_model and device.type == 'cuda':
         model = torch.compile(model)
