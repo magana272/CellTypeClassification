@@ -567,12 +567,46 @@ def _save_model_kwargs(ckpt_dir, model_kw):
         json.dump(serialisable, f, indent=2)
 
 
-def _load_model_kwargs(ckpt_path):
-    """Load saved model kwargs from the checkpoint directory, if available."""
+def _infer_model_kwargs(model_name, ckpt_path):
+    """Infer architectural kwargs by peeking at state_dict weight shapes."""
+    sd = torch.load(ckpt_path, map_location='cpu', weights_only=True)
+    kw = {}
+    if model_name == 'CellTypeMLP':
+        if 'first.fc.0.weight' in sd:
+            kw['hidden_dim'] = sd['first.fc.0.weight'].shape[0]
+        n_hidden = sum(1 for k in sd if k.startswith('hidden.') and k.endswith('.fc.0.weight'))
+        kw['n_layers'] = 1 + n_hidden
+    elif model_name == 'CellTypeCNN':
+        n_stages = sum(1 for k in sd if k.startswith('stages.') and k.endswith('.0.conv1.weight'))
+        if n_stages > 0:
+            kw['n_stages'] = n_stages
+    elif model_name == 'CellTypeGNN':
+        n_layers = sum(1 for k in sd if k.startswith('blocks.') and 'conv.lin_l.weight' in k)
+        if n_layers > 0:
+            kw['n_layers'] = n_layers
+        if 'blocks.0.conv.lin_l.weight' in sd:
+            kw['hidden_dim'] = sd['blocks.0.conv.lin_l.weight'].shape[0]
+        elif 'encoder.0.weight' in sd:
+            kw['hidden_dim'] = sd['encoder.0.weight'].shape[0]
+    elif model_name == 'CellTypeTOSICA':
+        n_layers = sum(1 for k in sd if k.startswith('transformer.') and 'self_attn.in_proj_weight' in k)
+        if n_layers > 0:
+            kw['n_layers'] = n_layers
+    return kw
+
+
+def _load_model_kwargs(ckpt_path, model_name=None):
+    """Load saved model kwargs, falling back to inference from state_dict."""
     p = os.path.join(os.path.dirname(ckpt_path), 'model_kwargs.json')
     if os.path.exists(p):
         with open(p) as f:
             return json.load(f)
+    if model_name is not None:
+        print(f'No model_kwargs.json found, inferring architecture from checkpoint...')
+        kw = _infer_model_kwargs(model_name, ckpt_path)
+        if kw:
+            print(f'  Inferred: {kw}')
+        return kw
     return {}
 
 
@@ -664,7 +698,7 @@ def evaluate(cfg, data_dir, ckpt_path, squeeze_channel=False,
     class_names = list(ds_test.class_names)
 
     # Merge saved architectural kwargs with any extra kwargs (e.g. mask)
-    saved_kw = _load_model_kwargs(ckpt_path)
+    saved_kw = _load_model_kwargs(ckpt_path, model_name=cfg['model'])
     if extra_model_kwargs:
         saved_kw.update(extra_model_kwargs)
     model = build_model(cfg['model'], n_features, n_classes, **saved_kw)
@@ -687,7 +721,7 @@ def evaluate_graph(cfg, data, ckpt_path, n_features, n_classes,
 
     Returns dict with accuracy, f1, precision, recall, confusion_matrix.
     """
-    saved_kw = _load_model_kwargs(ckpt_path)
+    saved_kw = _load_model_kwargs(ckpt_path, model_name=cfg['model'])
     model = build_model(cfg['model'], n_features, n_classes, **saved_kw)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))

@@ -88,7 +88,7 @@ def _eval_standard_model(model_name, X_aligned, y_eval, gene_names,
     n_classes_train = len(np.load(os.path.join(TRAIN_DIR, 'class_names.npy'),
                                   allow_pickle=True))
 
-    saved_kw = T._load_model_kwargs(ckpt_path)
+    saved_kw = T._load_model_kwargs(ckpt_path, model_name=model_name)
     extra_kw = extra_model_kwargs or {}
     saved_kw.update(extra_kw)
     model = T.build_model(model_name, n_features, n_classes_train, **saved_kw)
@@ -125,7 +125,8 @@ def _eval_gnn_model(X_aligned, y_eval, gene_names, class_names):
     print(f'Building evaluation graph on SmartSeq data...')
     data = build_eval_graph(X_al, y_eval, k_neighbors=K_NEIGHBORS).to(T.DEVICE)
 
-    model = T.build_model('CellTypeGNN', n_features, n_classes_train)
+    saved_kw = T._load_model_kwargs(ckpt_path, model_name='CellTypeGNN')
+    model = T.build_model('CellTypeGNN', n_features, n_classes_train, **saved_kw)
     model.load_state_dict(torch.load(ckpt_path, map_location=T.DEVICE,
                                      weights_only=True))
     print(f'Loaded checkpoint: {ckpt_path}')
