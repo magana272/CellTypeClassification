@@ -353,18 +353,18 @@ def suggest_hparams(trial, model_name):
 
     # Model-specific architectural params
     if model_name == 'CellTypeMLP':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 10, step=1)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64, 128, 256, 512])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 7, step=2)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 128, 256])
     elif model_name == 'CellTypeCNN':
         params['n_stages'] = trial.suggest_int('n_stages', 2, 5, step=1)
     elif model_name == 'CellTypeTOSICA':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 4, step=1)
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 5, step=2)
         params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
         params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
     elif model_name == 'CellTypeGNN':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 10, step=1)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 64, 128, 256, 512])
-        params['k_neighbors'] = trial.suggest_categorical('k_neighbors', [3, 4, 5, 6, 7, 8, 9, 10])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 7, step=2)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 128, 256])
+        params['k_neighbors'] = trial.suggest_int('k_neighbors', 3, 10, step=2)
 
     return params
 
