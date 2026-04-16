@@ -211,10 +211,16 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE,
     ds_val.X = X_val
 
     pin = device.type == 'cuda'
+    nw = min(4, os.cpu_count() or 1)
+    pw = nw > 0
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
-                              drop_last=drop_last_train, pin_memory=pin)
+                              drop_last=drop_last_train, pin_memory=pin,
+                              num_workers=nw, persistent_workers=pw,
+                              prefetch_factor=2 if pw else None)
     val_loader = DataLoader(ds_val, batch_size=batch_size, shuffle=False,
-                            drop_last=False, pin_memory=pin)
+                            drop_last=False, pin_memory=pin,
+                            num_workers=nw, persistent_workers=pw,
+                            prefetch_factor=2 if pw else None)
     console.print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes')
     console.print(f'val:   {len(ds_val)} cells')
     return train_loader, val_loader, hvg_idx, scaler
@@ -610,7 +616,7 @@ def run_graph_hparam_search(cfg, data_dir, n_features, n_classes, weights,
                 opt_cls=params['optimizer'])
             writer, ckpt = _tune_writer_ckpt(cfg, trial.number)
             return train_graph(model, data, criterion, optimizer, scheduler,
-                               tune_epochs, writer, ckpt, patience=tune_epochs,
+                               tune_epochs, writer, ckpt, patience=5,
                                trial=trial)
         except torch.cuda.OutOfMemoryError:
             console.print(f'Trial {trial.number}: [yellow]CUDA OOM[/yellow] — pruning')

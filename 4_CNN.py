@@ -1,13 +1,14 @@
 from allen_brain.models import train as T
 
 SEED = 42
-BATCH_SIZE = 2048
-ACCUMULATION_STEPS = 4  # effective batch = 2048 * 4 = 8192
+BATCH_SIZE = 16384
+ACCUMULATION_STEPS = 1  # A100 fits 16384 directly; no accumulation overhead
 N_HVG = 2000
 N_HVG_RANGE = (1000, 3000, 500)
 DATA_DIR = 'data/10x'
-N_TRIALS = 10
-TUNE_EPOCHS = 30
+N_TRIALS = 8
+TUNE_EPOCHS = 10
+FINAL_EPOCHS = 30
 
 
 NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
@@ -22,7 +23,7 @@ COFIG = {
     'optimizer': 'adamw',
     'lr': 3e-4,
     'weight_decay': 1e-6,
-    'epochs': TUNE_EPOCHS,
+    'epochs': FINAL_EPOCHS,
     'loss': 'cross_entropy',
     'label_smoothing': 0.1,
     'normalize': NORMALIZE,

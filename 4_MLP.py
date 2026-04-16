@@ -4,8 +4,8 @@ SEED = 42
 BATCH_SIZE = 24576 * 2
 N_HVG = 0
 DATA_DIR = 'data/10x'
-N_TRIALS = 10
-TUNE_EPOCHS = 50
+N_TRIALS = 8
+TUNE_EPOCHS = 15
 
 NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
 
