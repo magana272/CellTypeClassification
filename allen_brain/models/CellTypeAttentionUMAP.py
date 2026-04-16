@@ -18,13 +18,13 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
-# Random gene selection
+# Random cell selection
 # ---------------------------------------------------------------------------
 
-def select_random_genes(n_genes, n_select=5000, seed=42):
-    """Return sorted indices of a random subset of genes."""
+def select_random_cells(n_cells, n_select=5000, seed=42):
+    """Return sorted indices of a random subset of cells."""
     rng = np.random.RandomState(seed)
-    idx = rng.choice(n_genes, size=min(n_select, n_genes), replace=False)
+    idx = rng.choice(n_cells, size=min(n_select, n_cells), replace=False)
     return np.sort(idx)
 
 

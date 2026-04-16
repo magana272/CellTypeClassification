@@ -1,11 +1,12 @@
 """Train TOSICA on a subset of cell types, detect held-out types as Unknown.
 
 Replicates the TOSICA paper's unknown cell type discovery experiment:
-  1. Randomly sample 5000 genes
-  2. Hold out one cell type from training
+  1. Randomly sample 5000 training cells
+  2. Hold out one cell type from training (skipping IT classes)
   3. Train TOSICA with pathway mask
   4. Predict on full test set — held-out cells should be flagged as 'Unknown'
-  5. Run the paper's attention embedding pipeline: normalize -> PCA -> kNN -> UMAP
+  5. Evaluate classification performance on known classes
+  6. Run the paper's attention embedding pipeline: normalize -> PCA -> kNN -> UMAP
 """
 
 import os
@@ -14,17 +15,20 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import scanpy as sc
 import torch
 from rich.console import Console
 from rich.panel import Panel
+from sklearn.metrics import (
+    f1_score, precision_score, recall_score,
+    classification_report, confusion_matrix,
+)
 from torch.utils.data import DataLoader
 
 from allen_brain.cell_data.cell_dataset import make_dataset, GeneExpressionDataset
 from allen_brain.models import train as T
 from allen_brain.models.CellTypeAttention import build_pathway_mask
 from allen_brain.models.CellTypeAttentionUMAP import (
-    select_random_genes, collect_attention, attention_umap,
+    select_random_cells, collect_attention, attention_umap,
 )
 
 console = Console()
@@ -36,7 +40,7 @@ DATA_DIR = 'data/10x'
 SAVE_DIR = 'figures'
 GMT_PATH = 'data/reactome.gmt'
 
-N_RANDOM_GENES = 5000
+N_RANDOM_CELLS = 5000
 SEED = 42
 BATCH_SIZE = 4096
 EPOCHS = 20
@@ -68,13 +72,6 @@ MODEL_KW = dict(embed_dim=64, n_heads=4, n_layers=1, dropout=0.41)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _subset_genes(ds, gene_idx):
-    """Subset dataset columns to selected gene indices."""
-    ds.X = np.asarray(ds.X[:, gene_idx])
-    ds.gene_names = ds.gene_names[gene_idx]
-    return ds
-
-
 def _hold_out_class(ds, class_idx):
     """Remove all cells of class_idx from the dataset. Returns new dataset arrays."""
     mask = ds.y != class_idx
@@ -105,30 +102,37 @@ def main():
                         border_style='cyan', expand=False))
 
     # ------------------------------------------------------------------
-    # 1. Load data and select random genes
+    # 1. Load data and subsample training cells
     # ------------------------------------------------------------------
     ds_train = make_dataset(DATA_DIR, split='train')
     ds_val   = make_dataset(DATA_DIR, split='val')
     ds_test  = make_dataset(DATA_DIR, split='test')
 
-    n_genes_total = len(ds_train.gene_names)
-    console.print(f'Total genes: {n_genes_total}')
+    n_train_total = len(ds_train)
+    console.print(f'Total training cells: {n_train_total}')
 
-    gene_idx = select_random_genes(n_genes_total, N_RANDOM_GENES, seed=SEED)
-    console.print(f'Randomly selected {len(gene_idx)} genes')
-
-    for ds in (ds_train, ds_val, ds_test):
-        _subset_genes(ds, gene_idx)
+    cell_idx = select_random_cells(n_train_total, N_RANDOM_CELLS, seed=SEED)
+    ds_train.X = np.asarray(ds_train.X)[cell_idx]
+    ds_train.y = np.asarray(ds_train.y)[cell_idx]
+    console.print(f'Randomly selected {len(cell_idx)} training cells')
 
     gene_names = [str(g) for g in ds_train.gene_names]
     all_class_names = list(ds_train.class_names)
     n_original_classes = ds_train.n_classes
 
     # ------------------------------------------------------------------
-    # 2. Pick held-out class (largest class for clear signal)
+    # 2. Pick held-out class (skip IT classes — too dominant)
     # ------------------------------------------------------------------
     counts = np.bincount(np.asarray(ds_train.y), minlength=n_original_classes)
-    held_out_idx = int(np.argmax(counts))
+    # Sort by count descending, skip any class whose name contains 'IT'
+    ranked = np.argsort(counts)[::-1]
+    held_out_idx = None
+    for idx in ranked:
+        if 'IT' not in all_class_names[idx].upper():
+            held_out_idx = int(idx)
+            break
+    if held_out_idx is None:
+        held_out_idx = int(ranked[0])
     held_out_name = all_class_names[held_out_idx]
     console.print(f'Holding out class [bold]{held_out_name}[/bold] '
                   f'({counts[held_out_idx]} train cells)')
@@ -197,7 +201,47 @@ def main():
     model.load_state_dict(torch.load(ckpt, map_location=T.DEVICE, weights_only=True))
 
     # ------------------------------------------------------------------
-    # 6. Predict on full test set (including held-out class)
+    # 6. Evaluate on known-class test cells (excluding held-out)
+    # ------------------------------------------------------------------
+    X_test_known, y_test_known, _ = _hold_out_class(ds_test, held_out_idx)
+    y_test_known_remapped, _ = _remap_labels(y_test_known, held_out_idx, n_original_classes)
+
+    known_test_ds = torch.utils.data.TensorDataset(
+        torch.from_numpy(X_test_known.astype(np.float32)),
+        torch.from_numpy(y_test_known_remapped))
+    known_test_loader = DataLoader(known_test_ds, batch_size=BATCH_SIZE,
+                                   shuffle=False, pin_memory=pin)
+
+    model.eval()
+    all_preds_known, all_labels_known = [], []
+    with torch.no_grad():
+        for xb, yb in known_test_loader:
+            xb = xb.to(T.DEVICE)
+            logits = model(xb)
+            all_preds_known.append(logits.argmax(1).cpu().numpy())
+            all_labels_known.append(yb.numpy())
+    y_pred_known = np.concatenate(all_preds_known)
+    y_true_known = np.concatenate(all_labels_known)
+
+    acc_known = (y_pred_known == y_true_known).mean()
+    f1_mac = f1_score(y_true_known, y_pred_known, average='macro', zero_division=0)
+    f1_wt  = f1_score(y_true_known, y_pred_known, average='weighted', zero_division=0)
+    prec   = precision_score(y_true_known, y_pred_known, average='macro', zero_division=0)
+    rec    = recall_score(y_true_known, y_pred_known, average='macro', zero_division=0)
+
+    console.print(Panel(
+        '[bold]Performance on Known Classes (test set, held-out excluded)[/bold]\n'
+        f'  Accuracy:            [bold]{acc_known:.4f}[/bold]\n'
+        f'  F1 (macro):          {f1_mac:.4f}\n'
+        f'  F1 (weighted):       {f1_wt:.4f}\n'
+        f'  Precision (macro):   {prec:.4f}\n'
+        f'  Recall (macro):      {rec:.4f}',
+        border_style='cyan', expand=False))
+    console.print(classification_report(
+        y_true_known, y_pred_known, target_names=reduced_class_names, zero_division=0))
+
+    # ------------------------------------------------------------------
+    # 7. Predict on full test set (including held-out class)
     # ------------------------------------------------------------------
     X_test = np.asarray(ds_test.X).astype(np.float32)
     y_test = np.asarray(ds_test.y)
@@ -219,16 +263,29 @@ def main():
     n_held_unknown = (is_held & unknown_mask).sum()
     pct = n_held_unknown / max(n_held, 1) * 100
 
+    # Unknown detection metrics
+    # Binary classification: is this cell from the held-out class?
+    true_is_unknown = is_held.astype(int)
+    pred_is_unknown = unknown_mask.astype(int)
+    tp = (true_is_unknown & pred_is_unknown).sum()
+    fp = (~is_held & unknown_mask).sum()
+    fn = (is_held & ~unknown_mask).sum()
+    tn = (~is_held & ~unknown_mask).sum()
+    unknown_prec = tp / max(tp + fp, 1)
+    unknown_rec  = tp / max(tp + fn, 1)
+    unknown_f1   = 2 * unknown_prec * unknown_rec / max(unknown_prec + unknown_rec, 1e-9)
+
     console.print(Panel(
-        f'Held-out class: [bold]{held_out_name}[/bold]\n'
-        f'  Test cells: {n_held}\n'
-        f'  Flagged as Unknown (threshold={UNKNOWN_THRESHOLD}): '
-        f'[bold green]{n_held_unknown}[/bold green] ({pct:.1f}%)\n'
-        f'  Other cells flagged Unknown: {(~is_held & unknown_mask).sum()}',
+        f'[bold]Unknown Cell Detection[/bold]  (held-out: {held_out_name})\n'
+        f'  Test cells (held-out): {n_held}\n'
+        f'  Flagged as Unknown:    [bold green]{n_held_unknown}[/bold green] ({pct:.1f}%)\n'
+        f'  Other cells flagged:   {fp}\n'
+        f'  TP={tp}  FP={fp}  FN={fn}  TN={tn}\n'
+        f'  Precision: {unknown_prec:.4f}   Recall: {unknown_rec:.4f}   F1: {unknown_f1:.4f}',
         border_style='green', expand=False))
 
     # ------------------------------------------------------------------
-    # 7. Attention embedding UMAP (paper pipeline)
+    # 8. Attention embedding UMAP (paper pipeline)
     # ------------------------------------------------------------------
     console.print('Running attention embedding UMAP (normalize -> PCA -> kNN -> UMAP)...')
 
@@ -242,7 +299,7 @@ def main():
     umap_coords = adata.obsm['X_umap']
 
     # ------------------------------------------------------------------
-    # 8. Plot: UMAP colored by cell type, Unknown highlighted
+    # 9. Plot: UMAP colored by cell type, Unknown highlighted
     # ------------------------------------------------------------------
     fig, axes = plt.subplots(1, 2, figsize=(20, 8))
 
@@ -286,7 +343,7 @@ def main():
     console.print(f'[green]Saved[/green] {save_path}')
 
     # ------------------------------------------------------------------
-    # 9. Confidence histogram
+    # 10. Confidence histogram
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.hist(max_probs[is_held], bins=50, alpha=0.7,
