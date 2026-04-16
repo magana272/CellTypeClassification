@@ -7,11 +7,11 @@ BATCH_SIZE = 1024*8
 N_HVG = 0
 DATA_DIR = 'data/10x'
 GMT_PATH = 'data/reactome.gmt'
-MAX_PATHWAYS = 300
+MAX_PATHWAYS = 500
 MIN_PATHWAY_OVERLAP = 5
-MAX_GENE_SET_SIZE = 300
+MAX_GENE_SET_SIZE = 500
 N_TRIALS = 30
-TUNE_EPOCHS = 100
+TUNE_EPOCHS = 50
 
 NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
 

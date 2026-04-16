@@ -6,7 +6,7 @@ N_HVG = 2000
 N_HVG_RANGE = (500, 5000, 500)
 DATA_DIR = 'data/10x'
 N_TRIALS = 30
-TUNE_EPOCHS = 100
+TUNE_EPOCHS = 50
 
 NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
 
