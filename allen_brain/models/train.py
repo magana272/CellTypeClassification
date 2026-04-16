@@ -363,12 +363,12 @@ def suggest_hparams(trial, model_name):
         lr = trial.suggest_float('lr', 2e-3, 2e-2, log=True)
         wd = trial.suggest_float('weight_decay', 2e-4, 2e-3, log=True)
         params = dict(lr=lr, weight_decay=wd)
-        params['dropout'] = trial.suggest_float('dropout', 0.3, 0.5)
-        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.12)
-        params['optimizer'] = trial.suggest_categorical('optimizer', ['adam', 'adamw'])
-        params['loss'] = trial.suggest_categorical('loss', ['focal', 'cross_entropy'])
-        params['n_layers'] = trial.suggest_int('n_layers', 3, 5)
-        params['n_heads'] = trial.suggest_categorical('n_heads', [4, 8])
+        params['dropout'] = 0.4137788066524075
+        params['label_smoothing'] = 0.06092275383467414
+        params['optimizer'] = 'adam'  # adamw performed worse in tuning, so fix to adam
+        params['loss'] = 'focal'  # CE performed poorly in tuning, so fix to focal
+        params['n_layers'] = trial.suggest_int('n_layers', 1,5, step=1)
+        params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
         params['embed_dim'] = trial.suggest_categorical('embed_dim', [48, 64])
 
     elif model_name == 'CellTypeGNN':
