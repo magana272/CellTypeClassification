@@ -211,16 +211,10 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE,
     ds_val.X = X_val
 
     pin = device.type == 'cuda'
-    nw = min(4, os.cpu_count() or 1)
-    pw = nw > 0
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
-                              drop_last=drop_last_train, pin_memory=pin,
-                              num_workers=nw, persistent_workers=pw,
-                              prefetch_factor=2 if pw else None)
+                              drop_last=drop_last_train, pin_memory=pin)
     val_loader = DataLoader(ds_val, batch_size=batch_size, shuffle=False,
-                            drop_last=False, pin_memory=pin,
-                            num_workers=nw, persistent_workers=pw,
-                            prefetch_factor=2 if pw else None)
+                            drop_last=False, pin_memory=pin)
     console.print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes')
     console.print(f'val:   {len(ds_val)} cells')
     return train_loader, val_loader, hvg_idx, scaler
