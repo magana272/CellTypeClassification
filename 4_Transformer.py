@@ -14,8 +14,6 @@ MAX_GENE_SET_SIZE = 300
 N_TRIALS = 10
 TUNE_EPOCHS = 2
 
-NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
-
 COFIG = {
     'model': 'CellTypeTOSICA',
     'seed': SEED,
@@ -29,7 +27,6 @@ COFIG = {
     'epochs': 20,
     'loss': 'cross_entropy',
     'label_smoothing': 0.1,
-    'normalize': NORMALIZE,
 }
 
 

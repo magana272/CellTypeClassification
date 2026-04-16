@@ -7,8 +7,6 @@ DATA_DIR = 'data/10x'
 N_TRIALS = 10
 TUNE_EPOCHS = 50
 
-NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
-
 COFIG = {
     'model': 'CellTypeMLP',
     'seed': SEED,
@@ -21,7 +19,6 @@ COFIG = {
     'epochs': 20,
     'loss': 'cross_entropy',
     'label_smoothing': 0.1,
-    'normalize': NORMALIZE,
 }
 
 

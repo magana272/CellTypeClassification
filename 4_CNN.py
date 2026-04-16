@@ -10,8 +10,6 @@ N_TRIALS = 10
 TUNE_EPOCHS = 30
 
 
-NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
-
 COFIG = {
     'model': 'CellTypeCNN',
     'seed': SEED,
@@ -25,7 +23,6 @@ COFIG = {
     'epochs': TUNE_EPOCHS,
     'loss': 'cross_entropy',
     'label_smoothing': 0.1,
-    'normalize': NORMALIZE,
 }
 
 

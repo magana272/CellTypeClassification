@@ -4,7 +4,6 @@ import gc
 import glob
 import json
 import os
-import pickle
 
 import numpy as np
 import pandas as pd
@@ -20,7 +19,6 @@ from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     confusion_matrix, classification_report,
 )
-from sklearn.preprocessing import StandardScaler
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -76,10 +74,8 @@ def make_writer_and_ckpt(cfg, n_features):
 def train_with_tuning(cfg, data_dir, squeeze_channel,
                       n_trials=15, tune_epochs=5,
                       n_hvg_range=None, extra_model_kwargs=None):
-    normalize = cfg.get('normalize')
-    train_loader, val_loader, hvg_idx, scaler = make_dataloaders(
-        data_dir, cfg['batch_size'], n_hvg=cfg.get('n_hvg'),
-        normalize=normalize)
+    train_loader, val_loader, hvg_idx = make_dataloaders(
+        data_dir, cfg['batch_size'], n_hvg=cfg.get('n_hvg'))
     loaders = (train_loader, val_loader)
     ds = train_loader.dataset
 
@@ -98,17 +94,14 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     label_smoothing = bp.get('label_smoothing', cfg.get('label_smoothing', 0.1))
     focal_gamma = bp.get('focal_gamma', cfg.get('focal_gamma', 2.0))
     dropout = bp.get('dropout', cfg.get('dropout', 0.1))
-    normalize = bp.get('normalize', cfg.get('normalize'))
-    if normalize == 'none':
-        normalize = None
 
-    # Rebuild dataloaders with best n_hvg + normalize
-    best_n_hvg = bp.get('n_hvg', cfg.get('n_hvg'))
-    train_loader, val_loader, hvg_idx, scaler = make_dataloaders(
-        data_dir, cfg['batch_size'], n_hvg=best_n_hvg,
-        normalize=normalize)
-    loaders = (train_loader, val_loader)
-    ds = train_loader.dataset
+    # Rebuild dataloaders if n_hvg was tuned
+    if 'n_hvg' in bp:
+        cfg['n_hvg'] = bp['n_hvg']
+        train_loader, val_loader, hvg_idx = make_dataloaders(
+            data_dir, cfg['batch_size'], n_hvg=cfg['n_hvg'])
+        loaders = (train_loader, val_loader)
+        ds = train_loader.dataset
 
     # Build model with best architectural params
     model_kw = dict(dropout=dropout)
@@ -128,12 +121,6 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     ckpt_dir = os.path.dirname(ckpt)
     if hvg_idx is not None:
         np.save(os.path.join(ckpt_dir, 'hvg_indices.npy'), hvg_idx)
-    if scaler is not None:
-        with open(os.path.join(ckpt_dir, 'scaler.pkl'), 'wb') as f:
-            pickle.dump(scaler, f)
-    if normalize:
-        with open(os.path.join(ckpt_dir, 'normalize.txt'), 'w') as f:
-            f.write(normalize)
     _save_model_kwargs(ckpt_dir, model_kw)
 
     console.print(f'Training {cfg["epochs"]} epochs with best params on {DEVICE}...')
@@ -146,53 +133,7 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     return best, ckpt, bp
 
 
-def _log_normalize(X: np.ndarray) -> np.ndarray:
-    """Library-size normalize + log1p: log1p(X / lib_size * 1e4)."""
-    X = np.asarray(X, dtype=np.float32)
-    lib = X.sum(axis=1, keepdims=True)
-    lib = np.maximum(lib, 1.0)
-    return np.log1p(X / lib * 1e4)
-
-
-def _apply_normalization(X_train: np.ndarray, X_val: np.ndarray,
-                         normalize: str | None) -> tuple[np.ndarray, np.ndarray, StandardScaler | None]:
-    """Apply normalization to train/val arrays.
-
-    normalize: None, 'log', 'standard', or 'log+standard'.
-    Returns (X_train, X_val, scaler_or_None).
-    """
-    if not normalize or normalize == 'none':
-        return X_train, X_val, None
-
-    scaler = None
-    if normalize in ('log', 'log+standard'):
-        console.print('Applying log normalization (log1p of library-size-normalized counts)...')
-        X_train = _log_normalize(X_train)
-        X_val = _log_normalize(X_val)
-
-    if normalize in ('standard', 'log+standard'):
-        console.print('Applying StandardScaler (fit on train)...')
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train).astype(np.float32)
-        X_val = scaler.transform(X_val).astype(np.float32)
-
-    return X_train, X_val, scaler
-
-
-def _apply_normalization_test(X_test: np.ndarray, normalize: str | None,
-                              scaler: StandardScaler | None) -> np.ndarray:
-    """Apply the same normalization to a test array."""
-    if not normalize or normalize == 'none':
-        return X_test
-    if normalize in ('log', 'log+standard'):
-        X_test = _log_normalize(X_test)
-    if normalize in ('standard', 'log+standard') and scaler is not None:
-        X_test = scaler.transform(X_test).astype(np.float32)
-    return X_test
-
-
-def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE,
-                     n_hvg=None, normalize=None):
+def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE, n_hvg=None):
     ds = make_dataset(data_dir, split='train')
     ds_val = make_dataset(data_dir, split='val')
     hvg_idx = None
@@ -204,12 +145,6 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE,
         ds.gene_names = ds.gene_names[hvg_idx]
         ds_val.gene_names = ds_val.gene_names[hvg_idx]
 
-    # Apply normalization
-    X_train, X_val, scaler = _apply_normalization(
-        np.asarray(ds.X), np.asarray(ds_val.X), normalize)
-    ds.X = X_train
-    ds_val.X = X_val
-
     pin = device.type == 'cuda'
     train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
                               drop_last=drop_last_train, pin_memory=pin)
@@ -217,7 +152,7 @@ def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE,
                             drop_last=False, pin_memory=pin)
     console.print(f'train: {len(ds)} cells, {ds.n_classes} classes, {len(ds.gene_names)} genes')
     console.print(f'val:   {len(ds_val)} cells')
-    return train_loader, val_loader, hvg_idx, scaler
+    return train_loader, val_loader, hvg_idx
 
 
 def class_weights(ds: GeneExpressionDataset, device=DEVICE):
@@ -394,7 +329,7 @@ def suggest_hparams(trial, model_name):
         params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam', 'sgd'])
         params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
 
-    # Shared: focal gamma + normalize
+    # Shared: focal gamma
     if params['loss'] == 'focal':
         if model_name == 'CellTypeTOSICA':
             params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.3, 1.5)
@@ -404,8 +339,6 @@ def suggest_hparams(trial, model_name):
             params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.5, 5.0)
     else:
         params['focal_gamma'] = 2.0
-    params['normalize'] = trial.suggest_categorical(
-        'normalize', ['none', 'log', 'standard', 'log+standard'])
 
     return params
 
@@ -471,7 +404,6 @@ def run_hparam_search(cfg, ds, loaders, squeeze_channel,
     extra_model_kwargs : dict, optional
         Extra kwargs forwarded to build_model (e.g. mask, n_pathways for TOSICA).
     """
-    base_normalize = cfg.get('normalize') or 'none'
     default_weights = class_weights(ds)
     extra_kw = extra_model_kwargs or {}
 
@@ -483,20 +415,12 @@ def run_hparam_search(cfg, ds, loaders, squeeze_channel,
             model_kw = _model_kwargs_from_params(params, cfg['model'])
             model_kw.update(extra_kw)
 
-            trial_normalize = params['normalize']
-            n_hvg = cfg.get('n_hvg')
             if n_hvg_range is not None:
                 n_hvg = trial.suggest_int(
                     'n_hvg', n_hvg_range[0], n_hvg_range[1],
                     step=n_hvg_range[2])
-
-            needs_rebuild = (n_hvg_range is not None
-                             or trial_normalize != base_normalize)
-            if needs_rebuild and data_dir is not None:
-                norm = trial_normalize if trial_normalize != 'none' else None
-                tl, vl, _, _ = make_dataloaders(
-                    data_dir, cfg['batch_size'], n_hvg=n_hvg,
-                    normalize=norm)
+                tl, vl, _ = make_dataloaders(
+                    data_dir, cfg['batch_size'], n_hvg=n_hvg)
                 trial_loaders = (tl, vl)
                 trial_ds = tl.dataset
                 n_feat = len(trial_ds.gene_names)
@@ -584,20 +508,17 @@ def run_graph_hparam_search(cfg, data_dir, n_features, n_classes, weights,
     from allen_brain.models.CellTypeGNN import build_graph_data
     graph_cache = {}
 
-    def _get_graph(k, norm):
-        key = (k, norm)
-        if key not in graph_cache:
-            graph_cache[key] = build_graph_data(
-                data_dir, k_neighbors=k,
-                normalize=norm if norm != 'none' else None).to(DEVICE)
-        return graph_cache[key]
+    def _get_graph(k):
+        if k not in graph_cache:
+            graph_cache[k] = build_graph_data(data_dir, k_neighbors=k).to(DEVICE)
+        return graph_cache[k]
 
     def objective(trial):
         model = optimizer = scheduler = writer = None
         try:
             params = suggest_hparams(trial, 'CellTypeGNN')
             k = params['k_neighbors']
-            data = _get_graph(k, params['normalize'])
+            data = _get_graph(k)
 
             model_kw = _model_kwargs_from_params(params, 'CellTypeGNN')
             model = build_model('CellTypeGNN', n_features, n_classes, **model_kw)
@@ -644,13 +565,9 @@ def train_graph_with_tuning(cfg, data_dir, n_features, n_classes, weights,
     focal_gamma = bp.get('focal_gamma', cfg.get('focal_gamma', 2.0))
     dropout = bp.get('dropout', cfg.get('dropout', 0.3))
     k_neighbors = bp.get('k_neighbors', cfg.get('k_neighbors', 15))
-    normalize = bp.get('normalize', cfg.get('normalize'))
-    if normalize == 'none':
-        normalize = None
 
-    # Build graph with best k + normalize
-    data = build_graph_data(data_dir, k_neighbors=k_neighbors,
-                            normalize=normalize).to(DEVICE)
+    # Build graph with best k
+    data = build_graph_data(data_dir, k_neighbors=k_neighbors).to(DEVICE)
 
     # Build model with best architectural params
     model_kw = dict(dropout=dropout)
@@ -910,21 +827,6 @@ def evaluate(cfg, data_dir, ckpt_path, squeeze_channel=False,
         ds_test.X = np.asarray(ds_test.X[:, hvg_idx])
         ds_test.gene_names = ds_test.gene_names[hvg_idx]
         console.print(f'Applied HVG selection: {len(hvg_idx)} genes')
-
-    # Apply normalization if saved during training
-    normalize = None
-    norm_path = os.path.join(ckpt_dir, 'normalize.txt')
-    if os.path.exists(norm_path):
-        with open(norm_path) as f:
-            normalize = f.read().strip()
-    scaler = None
-    scaler_path = os.path.join(ckpt_dir, 'scaler.pkl')
-    if os.path.exists(scaler_path):
-        with open(scaler_path, 'rb') as f:
-            scaler = pickle.load(f)
-    if normalize:
-        console.print(f'Applying saved normalization: {normalize}')
-        ds_test.X = _apply_normalization_test(np.asarray(ds_test.X), normalize, scaler)
 
     n_features = len(ds_test.gene_names)
     n_classes = ds_test.n_classes

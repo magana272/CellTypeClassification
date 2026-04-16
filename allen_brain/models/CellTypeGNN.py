@@ -74,29 +74,10 @@ def build_knn_edges(X_all, k):
     return torch.unique(edge_index, dim=1)
 
 
-def build_graph_data(data_dir, k_neighbors=15, normalize=None):
-    """Load data and build a PyG Data object with k-NN edges and split masks.
-
-    normalize: None, 'log', 'standard', or 'log+standard'.
-    StandardScaler is fit on train split only, then applied to all.
-    """
+def build_graph_data(data_dir, k_neighbors=15):
+    """Load data and build a PyG Data object with k-NN edges and split masks."""
     X_all, y_all, sizes = load_combined_xy(data_dir)
     tr_m, vl_m, te_m = build_masks(sizes)
-
-    if normalize and normalize != 'none':
-        n_train = sizes['train']
-        if normalize in ('log', 'log+standard'):
-            console.print('GNN: applying log normalization...')
-            lib = X_all.sum(axis=1, keepdims=True)
-            lib = np.maximum(lib, 1.0)
-            X_all = np.log1p(X_all / lib * 1e4)
-        if normalize in ('standard', 'log+standard'):
-            from sklearn.preprocessing import StandardScaler
-            console.print('GNN: applying StandardScaler (fit on train)...')
-            scaler = StandardScaler()
-            X_all[:n_train] = scaler.fit_transform(X_all[:n_train])
-            X_all[n_train:] = scaler.transform(X_all[n_train:])
-
     edge_index = build_knn_edges(X_all, k_neighbors)
     n_total = X_all.shape[0]
     console.print(f'Graph: {n_total:,} nodes, {edge_index.shape[1]:,} edges, '

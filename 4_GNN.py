@@ -11,8 +11,6 @@ K_NEIGHBORS = 10
 N_TRIALS = 10
 TUNE_EPOCHS = 50
 
-NORMALIZE = 'log+standard'  # None, 'log', 'standard', or 'log+standard'
-
 COFIG = {
     'model': 'CellTypeGNN',
     'seed': SEED,
@@ -26,14 +24,12 @@ COFIG = {
     'loss': 'cross_entropy',
     'label_smoothing': 0.1,
     'k_neighbors': K_NEIGHBORS,
-    'normalize': NORMALIZE,
 }
 
 
 def main():
     # Load data once to get n_features, n_classes, weights for the search
-    data = build_graph_data(DATA_DIR, k_neighbors=K_NEIGHBORS,
-                            normalize=NORMALIZE).to(T.DEVICE)
+    data = build_graph_data(DATA_DIR, k_neighbors=K_NEIGHBORS).to(T.DEVICE)
     n_classes = int(data.y.max().item()) + 1
     class_names = list(np.load(f'{DATA_DIR}/class_names.npy', allow_pickle=True))
     weights = masked_class_weights(data.y, data.train_mask, n_classes)
@@ -45,13 +41,9 @@ def main():
         n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS)
     T.save_hyperparameters('CellTypeGNN', best_params, COFIG)
 
-    # Rebuild graph with best k + normalize for evaluation
+    # Rebuild graph with best k for evaluation
     best_k = best_params.get('k_neighbors', K_NEIGHBORS)
-    best_normalize = best_params.get('normalize', NORMALIZE)
-    if best_normalize == 'none':
-        best_normalize = None
-    eval_data = build_graph_data(DATA_DIR, k_neighbors=best_k,
-                                 normalize=best_normalize).to(T.DEVICE)
+    eval_data = build_graph_data(DATA_DIR, k_neighbors=best_k).to(T.DEVICE)
     metrics = T.evaluate_graph(COFIG, eval_data, ckpt, n_features, n_classes,
                                class_names=class_names)
     T.append_results_csv('GNN', metrics)
