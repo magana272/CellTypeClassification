@@ -6,7 +6,7 @@ ACCUMULATION_STEPS = 4  # effective batch = 2048 * 4 = 8192
 N_HVG = 2000
 N_HVG_RANGE = (1000, 3000, 500)
 DATA_DIR = 'data/10x'
-N_TRIALS = 30
+N_TRIALS = 10
 TUNE_EPOCHS = 30
 
 
