@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import nn
 from torch_geometric.data import Data
 from torch_geometric.nn import SAGEConv
-import faiss
 
 
 def load_combined_xy(data_dir):

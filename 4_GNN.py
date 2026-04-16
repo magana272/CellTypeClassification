@@ -38,13 +38,15 @@ def main():
 
     best_acc, ckpt, best_params = T.train_graph_with_tuning(
         COFIG, DATA_DIR, n_features, n_classes, weights,
-        n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS, )
+        n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS)
+    T.save_hyperparameters('CellTypeGNN', best_params, COFIG)
 
     # Rebuild graph with best k for evaluation
     best_k = best_params.get('k_neighbors', K_NEIGHBORS)
     eval_data = build_graph_data(DATA_DIR, k_neighbors=best_k).to(T.DEVICE)
-    T.evaluate_graph(COFIG, eval_data, ckpt, n_features, n_classes,
-                     class_names=class_names)
+    metrics = T.evaluate_graph(COFIG, eval_data, ckpt, n_features, n_classes,
+                               class_names=class_names)
+    T.append_results_csv('GNN', metrics)
 
 
 if __name__ == '__main__':

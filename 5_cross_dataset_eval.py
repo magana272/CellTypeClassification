@@ -1,7 +1,6 @@
 """Cross-dataset evaluation: models trained on 10x, evaluated on SmartSeq."""
 
 import os
-import glob
 
 import numpy as np
 import torch
@@ -26,15 +25,7 @@ MIN_PATHWAY_OVERLAP = 5
 MAX_GENE_SET_SIZE = 300
 
 
-def _find_best_ckpt(model_name):
-    """Find the most recent best_model.pt for a given model name."""
-    pattern = f'runs/{model_name}/*/best_model.pt'
-    matches = sorted(glob.glob(pattern), key=os.path.getmtime)
-    # Exclude tune/ directory
-    matches = [m for m in matches if '/tune/' not in m]
-    if not matches:
-        return None
-    return matches[-1]
+_find_best_ckpt = T.find_best_ckpt
 
 
 def _load_eval_data():

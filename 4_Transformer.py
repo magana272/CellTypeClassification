@@ -40,11 +40,13 @@ def _build_pathway_kwargs():
 
 def main():
     extra_kw = _build_pathway_kwargs()
-    best_acc, ckpt = T.train_with_tuning(
+    best_acc, ckpt, best_params = T.train_with_tuning(
         COFIG, DATA_DIR, squeeze_channel=True,
         n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS,
         extra_model_kwargs=extra_kw)
-    T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=True)
+    T.save_hyperparameters('CellTypeTOSICA', best_params, COFIG)
+    metrics = T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=True)
+    T.append_results_csv('Transformer', metrics)
 
 
 if __name__ == '__main__':

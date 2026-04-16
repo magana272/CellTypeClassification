@@ -24,11 +24,13 @@ COFIG = {
 
 
 def main():
-    best_acc, ckpt = T.train_with_tuning(
+    best_acc, ckpt, best_params = T.train_with_tuning(
         COFIG, DATA_DIR, squeeze_channel=False,
         n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS,
         n_hvg_range=N_HVG_RANGE)
-    T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=False)
+    T.save_hyperparameters('CellTypeCNN', best_params, COFIG)
+    metrics = T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=False)
+    T.append_results_csv('CNN', metrics)
 
 
 if __name__ == '__main__':

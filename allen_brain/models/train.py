@@ -1,12 +1,14 @@
 """Shared training utilities: dataloaders, class weights, epoch loop, checkpointing, evaluation."""
 
 import gc
+import glob
 import json
 import os
 
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
@@ -123,7 +125,7 @@ def train_with_tuning(cfg, data_dir, squeeze_channel,
     best = train(model, loaders, criterion, optimizer, scheduler,
                  cfg['epochs'], writer, ckpt, squeeze_channel=squeeze_channel)
     print(f'\nBest validation accuracy: {best:.4f}')
-    return best, ckpt
+    return best, ckpt, bp
 
 
 def make_dataloaders(data_dir, batch_size, drop_last_train=True, device=DEVICE, n_hvg=None):
@@ -611,6 +613,50 @@ def _load_model_kwargs(ckpt_path, model_name=None):
 
 
 # ---------------------------------------------------------------------------
+# Hyperparameter & results persistence
+# ---------------------------------------------------------------------------
+
+def find_best_ckpt(model_name):
+    """Find the most recent best_model.pt for a given model name."""
+    pattern = f'runs/{model_name}/*/best_model.pt'
+    matches = sorted(glob.glob(pattern), key=os.path.getmtime)
+    matches = [m for m in matches if '/tune/' not in m]
+    return matches[-1] if matches else None
+
+
+def save_hyperparameters(model_name, best_params, cfg, save_dir='finalhyperparameter'):
+    """Write best hyperparameters to a human-readable text file."""
+    os.makedirs(save_dir, exist_ok=True)
+    merged = dict(cfg)
+    merged.pop('device', None)
+    if best_params:
+        merged.update(best_params)
+    path = os.path.join(save_dir, f'{model_name}_hyperparameters.txt')
+    with open(path, 'w') as f:
+        for k in sorted(merged):
+            f.write(f'{k} = {merged[k]}\n')
+    print(f'Saved hyperparameters to {path}')
+
+
+def append_results_csv(model_name, metrics, csv_path='results.csv'):
+    """Append one row of evaluation metrics to results CSV."""
+    row = {'model': model_name}
+    for k, v in metrics.items():
+        if k != 'confusion_matrix':
+            row[k] = v
+    df_new = pd.DataFrame([row])
+    if os.path.exists(csv_path):
+        df_old = pd.read_csv(csv_path)
+        # Replace existing row for same model, or append
+        df_old = df_old[df_old['model'] != model_name]
+        df = pd.concat([df_old, df_new], ignore_index=True)
+    else:
+        df = df_new
+    df.to_csv(csv_path, index=False)
+    print(f'Results for {model_name} written to {csv_path}')
+
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
@@ -640,6 +686,30 @@ def _collect_predictions(model, loader, squeeze_channel=False, device=DEVICE):
             all_preds.append(logits.argmax(1).cpu())
             all_labels.append(yb.cpu())
     return torch.cat(all_preds).numpy(), torch.cat(all_labels).numpy()
+
+
+def _collect_probabilities(model, loader, squeeze_channel=False, device=DEVICE):
+    """Run inference and collect softmax probabilities and labels."""
+    model.eval()
+    all_probs, all_labels = [], []
+    with torch.no_grad():
+        for xb, yb in loader:
+            xb, yb = prep_batch(xb, yb, squeeze_channel, device)
+            with _autocast(xb):
+                logits = model(xb)
+            all_probs.append(F.softmax(logits, dim=1).cpu())
+            all_labels.append(yb.cpu())
+    return torch.cat(all_probs).numpy(), torch.cat(all_labels).numpy()
+
+
+def _collect_graph_probabilities(model, data, mask):
+    """Run graph inference and collect softmax probabilities for masked nodes."""
+    model.eval()
+    with torch.no_grad():
+        logits = model(data.x, data.edge_index)
+    probs = F.softmax(logits[mask], dim=1).cpu().numpy()
+    labels = data.y[mask].cpu().numpy()
+    return probs, labels
 
 
 def _compute_metrics(y_true, y_pred, class_names, save_dir=None):
