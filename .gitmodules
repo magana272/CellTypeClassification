@@ -1,0 +1,3 @@
+[submodule "TOSICA"]
+	path = TOSICA
+	url = https://github.com/JackieHanLab/TOSICA.git
