@@ -90,7 +90,7 @@ Input (batch, n_genes)
 
 **Squeeze-and-Excitation block.** Given hidden activation $\mathbf{h} \in \mathbb{R}^{d}$, the SE gate computes channel-wise recalibration weights:
 
-$$\mathbf{s} = \sigma\!\bigl(W_2 \cdot \operatorname{ReLU}(W_1 \cdot \operatorname{AvgPool}(\mathbf{h}))\bigr), \quad \tilde{\mathbf{h}} = \mathbf{h} \odot \mathbf{s}$$
+$$\mathbf{s} = \sigma\!\bigl(W_2 \cdot \mathrm{ReLU}(W_1 \cdot \mathrm{AvgPool}(\mathbf{h}))\bigr), \quad \tilde{\mathbf{h}} = \mathbf{h} \odot \mathbf{s}$$
 
 where $W_1 \in \mathbb{R}^{(d/r) \times d}$, $W_2 \in \mathbb{R}^{d \times (d/r)}$ with reduction ratio $r = 8$, and $\sigma$ is the sigmoid function.
 
@@ -150,19 +150,19 @@ $$c_i = \min\!\left(32 \cdot 2^{\lfloor i/2 \rfloor},\; 256\right), \qquad k_i =
 
 **Pre-activation ResBlock with SE.** For input feature map $\mathbf{x}$:
 
-$$\mathbf{a} = \operatorname{Conv}_{k}\!\bigl(\operatorname{ReLU}(\operatorname{BN}(\mathbf{x}))\bigr)$$
+$$\mathbf{a} = \mathrm{Conv}_{k}\!\bigl(\mathrm{ReLU}(\mathrm{BN}(\mathbf{x}))\bigr)$$
 
-$$\mathbf{b} = \operatorname{Conv}_{k}\!\bigl(\operatorname{ReLU}(\operatorname{BN}(\mathbf{a}))\bigr)$$
+$$\mathbf{b} = \mathrm{Conv}_{k}\!\bigl(\mathrm{ReLU}(\mathrm{BN}(\mathbf{a}))\bigr)$$
 
-$$\mathbf{s} = \sigma\!\bigl(W_2 \cdot \operatorname{ReLU}(W_1 \cdot \operatorname{AvgPool}(\mathbf{b}))\bigr)$$
+$$\mathbf{s} = \sigma\!\bigl(W_2 \cdot \mathrm{ReLU}(W_1 \cdot \mathrm{AvgPool}(\mathbf{b}))\bigr)$$
 
-$$\mathbf{y} = (\mathbf{b} \odot \mathbf{s}) + \operatorname{Proj}(\mathbf{x})$$
+$$\mathbf{y} = (\mathbf{b} \odot \mathbf{s}) + \mathrm{Proj}(\mathbf{x})$$
 
-where $\operatorname{Proj}$ is a $1 \times 1$ convolution when the channel dimension changes, and identity otherwise.
+where $\mathrm{Proj}$ is a $1 \times 1$ convolution when the channel dimension changes, and identity otherwise.
 
 **Dual-pool aggregation:**
 
-$$\mathbf{z} = \bigl[\operatorname{AdaptiveAvgPool1d}(\mathbf{y});\; \operatorname{AdaptiveMaxPool1d}(\mathbf{y})\bigr] \in \mathbb{R}^{2c_{\text{last}}}$$
+$$\mathbf{z} = \bigl[\mathrm{AdaptiveAvgPool1d}(\mathbf{y});\; \mathrm{AdaptiveMaxPool1d}(\mathbf{y})\bigr] \in \mathbb{R}^{2c_{\text{last}}}$$
 
 | Hyperparameter | Search Range |
 |---|---|
@@ -224,17 +224,17 @@ yielding pathway token embeddings $\mathbf{E} \in \mathbb{R}^{d \times P}$.
 
 $$Q^{(h)} = \mathbf{Z} W_Q^{(h)}, \quad K^{(h)} = \mathbf{Z} W_K^{(h)}, \quad V^{(h)} = \mathbf{Z} W_V^{(h)}$$
 
-$$\operatorname{Attn}^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)} {K^{(h)}}^\top}{\sqrt{d_h}}\right) V^{(h)}$$
+$$\mathrm{Attn}^{(h)} = \mathrm{softmax}\!\left(\frac{Q^{(h)} {K^{(h)}}^\top}{\sqrt{d_h}}\right) V^{(h)}$$
 
-$$\operatorname{MHA}(\mathbf{Z}) = \operatorname{Concat}\!\bigl(\operatorname{Attn}^{(1)}, \dots, \operatorname{Attn}^{(H)}\bigr) W_O$$
+$$\mathrm{MHA}(\mathbf{Z}) = \mathrm{Concat}\!\bigl(\mathrm{Attn}^{(1)}, \dots, \mathrm{Attn}^{(H)}\bigr) W_O$$
 
 Each Transformer layer applies (with pre-normalization):
 
-$$\mathbf{Z}' = \mathbf{Z} + \operatorname{MHA}\!\bigl(\operatorname{LN}(\mathbf{Z})\bigr)$$
+$$\mathbf{Z}' = \mathbf{Z} + \mathrm{MHA}\!\bigl(\mathrm{LN}(\mathbf{Z})\bigr)$$
 
-$$\mathbf{Z}'' = \mathbf{Z}' + \operatorname{FFN}\!\bigl(\operatorname{LN}(\mathbf{Z}')\bigr)$$
+$$\mathbf{Z}'' = \mathbf{Z}' + \mathrm{FFN}\!\bigl(\mathrm{LN}(\mathbf{Z}')\bigr)$$
 
-where $\operatorname{FFN}(\mathbf{z}) = \operatorname{GELU}(\mathbf{z} W_1 + b_1) W_2 + b_2$ with inner dimension $4d$.
+where $\mathrm{FFN}(\mathbf{z}) = \mathrm{GELU}(\mathbf{z} W_1 + b_1) W_2 + b_2$ with inner dimension $4d$.
 
 | Hyperparameter | Search Range |
 |---|---|
@@ -285,7 +285,7 @@ All cells (train+val+test)
 
 **Graph construction.** Compute a symmetric k-NN graph using cosine similarity via normalized inner products:
 
-$$\hat{\mathbf{x}}_i = \frac{\mathbf{x}_i}{\|\mathbf{x}_i\|_2}, \qquad \mathcal{N}_k(i) = \underset{j \neq i}{\operatorname{top\text{-}k}} \;\hat{\mathbf{x}}_i^\top \hat{\mathbf{x}}_j$$
+$$\hat{\mathbf{x}}_i = \frac{\mathbf{x}_i}{\|\mathbf{x}_i\|_2}, \qquad \mathcal{N}_k(i) = \underset{j \neq i}{\mathrm{top\text{-}k}} \;\hat{\mathbf{x}}_i^\top \hat{\mathbf{x}}_j$$
 
 Edges are symmetrized: $(i, j) \in \mathcal{E} \iff j \in \mathcal{N}_k(i) \lor i \in \mathcal{N}_k(j)$.
 
@@ -297,9 +297,9 @@ $${\mathbf{h}_i^{(\ell)}}' = W_{\text{self}}^{(\ell)} \mathbf{h}_i^{(\ell-1)} + 
 
 **ResidualSAGEBlock.** Each block applies SAGEConv with LayerNorm, GELU activation, dropout, and a residual connection:
 
-$$\mathbf{h}_i^{(\ell)} = \operatorname{Dropout}\!\Bigl(\operatorname{GELU}\!\bigl(\operatorname{LN}({\mathbf{h}_i^{(\ell)}}')\bigr)\Bigr) + \operatorname{Proj}(\mathbf{h}_i^{(\ell-1)})$$
+$$\mathbf{h}_i^{(\ell)} = \mathrm{Dropout}\!\Bigl(\mathrm{GELU}\!\bigl(\mathrm{LN}({\mathbf{h}_i^{(\ell)}}')\bigr)\Bigr) + \mathrm{Proj}(\mathbf{h}_i^{(\ell-1)})$$
 
-where $\operatorname{Proj}$ is a linear projection when dimensions change, and identity otherwise.
+where $\mathrm{Proj}$ is a linear projection when dimensions change, and identity otherwise.
 
 | Hyperparameter | Search Range |
 |---|---|
@@ -405,12 +405,12 @@ To assess platform transfer, models trained on 10x are evaluated on the full Sma
 
 <table>
 <tr>
-<td align="center"><img src="assets/fig_mlp.svg" width="400"/><br/><b>Model 1 — MLP + SE</b></td>
-<td align="center"><img src="assets/fig_cnn.svg" width="400"/><br/><b>Model 2 — 1D-CNN + SE</b></td>
+<td align="center"><img src="assets/fig_mlp.png" width="400"/><br/><b>Model 1 — MLP + SE</b></td>
+<td align="center"><img src="assets/fig_cnn.png" width="400"/><br/><b>Model 2 — 1D-CNN + SE</b></td>
 </tr>
 <tr>
-<td align="center"><img src="assets/fig_tosica.svg" width="400"/><br/><b>Model 3 — TOSICA Transformer</b></td>
-<td align="center"><img src="assets/fig_gnn.svg" width="400"/><br/><b>Model 4 — GraphSAGE GNN</b></td>
+<td align="center"><img src="assets/fig_tosica.png" width="400"/><br/><b>Model 3 — TOSICA Transformer</b></td>
+<td align="center"><img src="assets/fig_gnn.png" width="400"/><br/><b>Model 4 — GraphSAGE GNN</b></td>
 </tr>
 </table>
 
