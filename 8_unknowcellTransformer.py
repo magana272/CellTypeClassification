@@ -24,6 +24,7 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader
 
 from allen_brain.cell_data.cell_dataset import make_dataset, GeneExpressionDataset
+from allen_brain.cell_data.cell_preprocess import select_hvg
 from allen_brain.models import train as T
 from allen_brain.models.CellTypeAttention import build_pathway_mask
 from allen_brain.models.CellTypeAttentionUMAP import (
@@ -60,7 +61,7 @@ CFG = {
     'label_smoothing': 0.06,
     'focal_gamma': 0.47,
     'normalize': 'none',
-    'n_hvg': 0,
+    'n_hvg': 10_000,
 }
 
 MODEL_KW = dict(embed_dim=64, n_heads=4, n_layers=1, dropout=0.41)
@@ -107,6 +108,16 @@ def main():
     ds_test  = make_dataset(DATA_DIR, split='test')
 
     console.print(f'Total training cells: {len(ds_train)}')
+
+    # HVG selection
+    n_hvg = CFG.get('n_hvg', 0)
+    if n_hvg and 0 < n_hvg < len(ds_train.gene_names):
+        console.print(f'Selecting top {n_hvg} HVGs by variance on train split...')
+        hvg_idx = np.sort(select_hvg(np.asarray(ds_train.X), n_hvg))
+        for ds in (ds_train, ds_val, ds_test):
+            ds.X = np.asarray(ds.X[:, hvg_idx])
+            ds.gene_names = ds.gene_names[hvg_idx]
+        console.print(f'Genes after HVG: {len(ds_train.gene_names)}')
 
     gene_names = [str(g) for g in ds_train.gene_names]
     all_class_names = list(ds_train.class_names)
