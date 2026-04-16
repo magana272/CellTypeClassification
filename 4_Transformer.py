@@ -4,7 +4,7 @@ from allen_brain.cell_data.cell_dataset import make_dataset
 
 SEED = 42
 BATCH_SIZE = 4096*4
-ACCUMULATION_STEPS = 6  # effective batch = 4096 * 6 = 24576
+ACCUMULATION_STEPS = 8  # effective batch = 4096 * 8 *4 = 131072
 N_HVG = 0
 DATA_DIR = 'data/10x'
 GMT_PATH = 'data/reactome.gmt'
