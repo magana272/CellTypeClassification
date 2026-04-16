@@ -328,43 +328,84 @@ def _step_epoch(model, loaders, criterion, optimizer, scheduler,
     return tr_loss, tr_acc, vl_loss, vl_acc
 
 
-def suggest_lr_wd(trial):
-    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
-    wd = trial.suggest_float('weight_decay', 1e-7, 1e-3, log=True)
-    return lr, wd
-
-
 def suggest_hparams(trial, model_name):
-    """Suggest all hyperparameters for a given model type."""
-    lr, wd = suggest_lr_wd(trial)
-    params = dict(lr=lr, weight_decay=wd)
+    """Suggest hyperparameters narrowed around previous best results.
 
-    # Shared across all models
-    params['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
-    params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.2)
-    params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam', 'sgd'])
-    params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal', ])
+    Ranges are tightened per-model based on finalhyparameter/*.txt so Optuna
+    converges faster with fewer trials.
+    """
+    # --- Model-specific priors (from previous best) ---
+    if model_name == 'CellTypeMLP':
+        # best: lr=4.3e-5, wd=5.3e-7, dropout=0.13, ls=0.06, adamw, CE
+        lr = trial.suggest_float('lr', 2e-5, 2e-4, log=True)
+        wd = trial.suggest_float('weight_decay', 1e-7, 5e-6, log=True)
+        params = dict(lr=lr, weight_decay=wd)
+        params['dropout'] = trial.suggest_float('dropout', 0.05, 0.25)
+        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.12)
+        params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam'])
+        params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 3)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [256, 512])
+
+    elif model_name == 'CellTypeCNN':
+        # best: lr=7.9e-3, wd=1.7e-4, dropout=0.19, ls=0.02, adamw, CE, stages=5
+        lr = trial.suggest_float('lr', 2e-3, 2e-2, log=True)
+        wd = trial.suggest_float('weight_decay', 5e-5, 5e-4, log=True)
+        params = dict(lr=lr, weight_decay=wd)
+        params['dropout'] = trial.suggest_float('dropout', 0.1, 0.3)
+        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.06)
+        params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam'])
+        params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
+        params['n_stages'] = trial.suggest_int('n_stages', 4, 5)
+
+    elif model_name == 'CellTypeTOSICA':
+        # best: lr=7.0e-3, wd=7.3e-4, dropout=0.41, ls=0.06, adam, focal(γ=0.65)
+        lr = trial.suggest_float('lr', 2e-3, 2e-2, log=True)
+        wd = trial.suggest_float('weight_decay', 2e-4, 2e-3, log=True)
+        params = dict(lr=lr, weight_decay=wd)
+        params['dropout'] = trial.suggest_float('dropout', 0.3, 0.5)
+        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.12)
+        params['optimizer'] = trial.suggest_categorical('optimizer', ['adam', 'adamw'])
+        params['loss'] = trial.suggest_categorical('loss', ['focal', 'cross_entropy'])
+        params['n_layers'] = trial.suggest_int('n_layers', 3, 5)
+        params['n_heads'] = trial.suggest_categorical('n_heads', [4, 8])
+        params['embed_dim'] = trial.suggest_categorical('embed_dim', [48, 64])
+
+    elif model_name == 'CellTypeGNN':
+        # best: lr=1.9e-3, wd=8.9e-7, dropout=0.38, ls=0.07, adam, focal(γ=1.94)
+        lr = trial.suggest_float('lr', 5e-4, 5e-3, log=True)
+        wd = trial.suggest_float('weight_decay', 1e-7, 5e-6, log=True)
+        params = dict(lr=lr, weight_decay=wd)
+        params['dropout'] = trial.suggest_float('dropout', 0.25, 0.5)
+        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.15)
+        params['optimizer'] = trial.suggest_categorical('optimizer', ['adam', 'adamw'])
+        params['loss'] = trial.suggest_categorical('loss', ['focal', 'cross_entropy'])
+        params['n_layers'] = trial.suggest_int('n_layers', 1, 3)
+        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [128, 256])
+        params['k_neighbors'] = trial.suggest_int('k_neighbors', 7, 11)
+
+    else:
+        # Fallback: wide search for unknown models
+        lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
+        wd = trial.suggest_float('weight_decay', 1e-7, 1e-3, log=True)
+        params = dict(lr=lr, weight_decay=wd)
+        params['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
+        params['label_smoothing'] = trial.suggest_float('label_smoothing', 0.0, 0.2)
+        params['optimizer'] = trial.suggest_categorical('optimizer', ['adamw', 'adam', 'sgd'])
+        params['loss'] = trial.suggest_categorical('loss', ['cross_entropy', 'focal'])
+
+    # Shared: focal gamma + normalize
     if params['loss'] == 'focal':
-        params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.5, 5.0)
+        if model_name == 'CellTypeTOSICA':
+            params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.3, 1.5)
+        elif model_name == 'CellTypeGNN':
+            params['focal_gamma'] = trial.suggest_float('focal_gamma', 1.0, 3.0)
+        else:
+            params['focal_gamma'] = trial.suggest_float('focal_gamma', 0.5, 5.0)
     else:
         params['focal_gamma'] = 2.0
     params['normalize'] = trial.suggest_categorical(
         'normalize', ['none', 'log', 'standard', 'log+standard'])
-
-    # Model-specific architectural params
-    if model_name == 'CellTypeMLP':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 7, step=2)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 128, 256])
-    elif model_name == 'CellTypeCNN':
-        params['n_stages'] = trial.suggest_int('n_stages', 2, 5, step=1)
-    elif model_name == 'CellTypeTOSICA':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 5, step=2)
-        params['n_heads'] = trial.suggest_categorical('n_heads', [2, 4, 8])
-        params['embed_dim'] = trial.suggest_categorical('embed_dim', [32, 48, 64])
-    elif model_name == 'CellTypeGNN':
-        params['n_layers'] = trial.suggest_int('n_layers', 1, 7, step=2)
-        params['hidden_dim'] = trial.suggest_categorical('hidden_dim', [32, 128, 256])
-        params['k_neighbors'] = trial.suggest_int('k_neighbors', 3, 10, step=2)
 
     return params
 
