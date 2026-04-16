@@ -1,6 +1,7 @@
 """Cross-dataset evaluation: models trained on 10x, evaluated on SmartSeq."""
 
 import os
+import pickle
 
 import numpy as np
 import torch
@@ -70,6 +71,25 @@ def _align_to_training(X_eval, gene_names_eval, ckpt_path):
     return X_aligned, gene_names_train
 
 
+def _apply_saved_normalization(X_al, ckpt_path):
+    """Load and apply saved normalization from checkpoint directory to eval data."""
+    ckpt_dir = os.path.dirname(ckpt_path)
+    normalize = None
+    norm_path = os.path.join(ckpt_dir, 'normalize.txt')
+    if os.path.exists(norm_path):
+        with open(norm_path) as f:
+            normalize = f.read().strip()
+    scaler = None
+    scaler_path = os.path.join(ckpt_dir, 'scaler.pkl')
+    if os.path.exists(scaler_path):
+        with open(scaler_path, 'rb') as f:
+            scaler = pickle.load(f)
+    if normalize:
+        console.print(f'Applying saved normalization: {normalize}')
+        X_al = T._apply_normalization_test(np.asarray(X_al, dtype=np.float32), normalize, scaler)
+    return X_al
+
+
 def _eval_standard_model(model_name, X_aligned, y_eval, gene_names,
                          class_names, squeeze_channel, extra_model_kwargs=None):
     """Evaluate a standard (non-graph) model on aligned data."""
@@ -79,6 +99,7 @@ def _eval_standard_model(model_name, X_aligned, y_eval, gene_names,
         return None
 
     X_al, gnames = _align_to_training(X_aligned, gene_names, ckpt_path)
+    X_al = _apply_saved_normalization(X_al, ckpt_path)
     n_features = X_al.shape[1]
     n_classes_train = len(np.load(os.path.join(TRAIN_DIR, 'class_names.npy'),
                                   allow_pickle=True))
