@@ -1,6 +1,7 @@
 
 from torch import nn
 
+
 class MLP_SEBlock(nn.Module):
     """Squeeze-and-Excitation block for 1D feature maps."""
     def __init__(self, channels, reduction=8):
@@ -18,6 +19,8 @@ class MLP_SEBlock(nn.Module):
         w = self.pool(x).squeeze(-1)
         w = self.fc(w).unsqueeze(-1)
         return x * w
+
+
 class MLPBlock(nn.Module):
     """Simple MLP block: Linear -> ReLU -> Dropout."""
 
@@ -31,21 +34,32 @@ class MLPBlock(nn.Module):
 
     def forward(self, x):
         return self.fc(x)
-    
+
 
 class MLP_Model(nn.Module):
-    """Simple MLP with two hidden layers and SE attention."""
-    def __init__(self, input_dim: int, n_classes: int, dropout: float = 0.3):
+    """MLP with variable depth, SE attention on first layer."""
+
+    def __init__(self, input_dim: int, n_classes: int, dropout: float = 0.3,
+                 n_layers: int = 2, hidden_dim: int = 512):
         super().__init__()
-        self.fc1 = MLPBlock(input_dim, 512, dropout=dropout)
-        self.se = MLP_SEBlock(512)
-        self.fc2 = MLPBlock(512, 256, dropout=dropout)
-        self.classifier = nn.Linear(256, n_classes)
+        # Build layer dimensions: halve each layer, min 64
+        dims = [max(hidden_dim // (2 ** i), 64) for i in range(n_layers)]
+
+        self.first = MLPBlock(input_dim, dims[0], dropout=dropout)
+        self.se = MLP_SEBlock(dims[0])
+
+        layers = []
+        for i in range(1, n_layers):
+            layers.append(MLPBlock(dims[i - 1], dims[i], dropout=dropout))
+        self.hidden = nn.ModuleList(layers)
+
+        self.classifier = nn.Linear(dims[-1], n_classes)
 
     def forward(self, x):
         if x.dim() == 3:
-            x = x.squeeze(1)        
-        x = self.fc1(x)
+            x = x.squeeze(1)
+        x = self.first(x)
         x = self.se(x.unsqueeze(-1)).squeeze(-1)
-        x = self.fc2(x)
+        for layer in self.hidden:
+            x = layer(x)
         return self.classifier(x)

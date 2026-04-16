@@ -1,136 +1,57 @@
-import os
-import requests
-
-import numpy as np
-import torch
-from torch import nn, optim
-from torch.utils.tensorboard.writer import SummaryWriter
-
-from allen_brain.models import get_model
 from allen_brain.models import train as T
+from allen_brain.models.CellTypeAttention import build_pathway_mask
+from allen_brain.cell_data.cell_dataset import make_dataset
 
-torch.set_float32_matmul_precision('high')
 SEED = 42
 BATCH_SIZE = 4096
-N_HVG = 2000
-
-DATA_DIR = 'data/smartseq'
+ACCUMULATION_STEPS = 1  # effective batch = 4096 * 6 = 24576
+N_HVG = 0
+DATA_DIR = 'data/10x'
 GMT_PATH = 'data/reactome.gmt'
-GMT_URL  = 'https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2023.2.Hs/c2.cp.reactome.v2023.2.Hs.symbols.gmt'
 MAX_PATHWAYS = 300
 MIN_PATHWAY_OVERLAP = 5
 MAX_GENE_SET_SIZE = 300
+N_TRIALS = 3
+TUNE_EPOCHS = 10
+
+NORMALIZE = None  # None, 'log', 'standard', or 'log+standard'
 
 COFIG = {
     'model': 'CellTypeTOSICA',
     'seed': SEED,
     'batch_size': BATCH_SIZE,
+    'accumulation_steps': ACCUMULATION_STEPS,
     'n_hvg': N_HVG,
     'device': str(T.DEVICE),
-    'optimizer': optim.AdamW,
-    'lr': 3e-4,
+    'optimizer': 'adamw',
+    'lr': 3e-3,
     'weight_decay': 1e-6,
     'epochs': 20,
-    'loss': nn.CrossEntropyLoss,
+    'loss': 'cross_entropy',
+    'label_smoothing': 0.1,
+    'normalize': NORMALIZE,
 }
 
 
-def _parse_gmt(path, max_gene_set_size=MAX_GENE_SET_SIZE):
-    gmt = {}
-    with open(path) as f:
-        for line in f:
-            parts = line.strip().split('\t')
-            if len(parts) < 3:
-                continue
-            genes = [g for g in parts[2:] if g]
-            if len(genes) <= max_gene_set_size:
-                gmt[parts[0]] = genes
-    return gmt
-
-
-def _download_gmt(path, url):
-    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    if os.path.exists(path):
-        return True
-    try:
-        print(f'Downloading Reactome GMT to {path}...')
-        r = requests.get(url, timeout=120)
-        r.raise_for_status()
-        with open(path, 'wb') as f:
-            f.write(r.content)
-        return True
-    except Exception as e:
-        print(f'GMT download failed ({e}); falling back to identity mask.')
-        return False
-
-
-def _select_pathways(gmt, gene_set, min_overlap, max_pathways):
-    kept = []
-    for name, genes in gmt.items():
-        overlap = [g for g in genes if g in gene_set]
-        if len(overlap) >= min_overlap:
-            kept.append((name, overlap))
-    kept.sort(key=lambda x: len(x[1]), reverse=True)
-    return kept[:max_pathways]
-
-
-def _pathways_to_mask(kept, gene_names):
-    gene_to_row = {g: i for i, g in enumerate(gene_names)}
-    mask = np.zeros((len(gene_names), len(kept)), dtype=np.float32)
-    for j, (_, genes) in enumerate(kept):
-        for g in genes:
-            i = gene_to_row.get(g)
-            if i is not None:
-                mask[i, j] = 1.0
-    return torch.from_numpy(mask)
-
-
-def build_pathway_mask(gene_names):
-    if not _download_gmt(GMT_PATH, GMT_URL):
-        return torch.eye(len(gene_names)), len(gene_names)
-    gmt = _parse_gmt(GMT_PATH)
-    print(f'Gene sets loaded: {len(gmt):,}')
-    kept = _select_pathways(gmt, set(gene_names), MIN_PATHWAY_OVERLAP, MAX_PATHWAYS)
-    if not kept:
-        print('No pathways matched; using identity mask.')
-        return torch.eye(len(gene_names)), len(gene_names)
-    mask = _pathways_to_mask(kept, gene_names)
-    print(f'Mask: {tuple(mask.shape)}, sparsity {1 - mask.mean().item():.2%}')
-    return mask, len(kept)
-
-
-def _build_model(ds):
-    gene_names = [str(g) for g in ds.gene_names]
-    mask, n_pathways = build_pathway_mask(gene_names)
-    model = get_model(
-        COFIG['model'], len(gene_names), ds.n_classes,
-        mask=mask, n_pathways=n_pathways,
-    ).to(T.DEVICE)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f'Model parameters: {n_params:,}')
-    return model
-
-
-def _make_writer_and_ckpt():
-    run_name = T.make_run_name(COFIG['model'], N_HVG, BATCH_SIZE,
-                               COFIG['epochs'], COFIG['lr'], COFIG['weight_decay'])
-    writer = SummaryWriter(log_dir=f'runs/{COFIG["model"]}/{run_name}')
-    return writer, f'best_model_{run_name}.pt'
+def _build_pathway_kwargs():
+    """Build extra_model_kwargs for TOSICA from training gene names."""
+    ds = make_dataset(DATA_DIR, split='train')
+    mask, n_pathways = build_pathway_mask(
+        [str(g) for g in ds.gene_names],
+        gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
+        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
+    return dict(mask=mask, n_pathways=n_pathways)
 
 
 def main():
-    ds, _, train_loader, val_loader = T.make_dataloaders(DATA_DIR, COFIG['batch_size'])
-    model = _build_model(ds)
-    criterion = COFIG['loss'](weight=T.class_weights(ds), label_smoothing=0.1)
-    optimizer, scheduler = T.build_optimizer(
-        model, COFIG['lr'], COFIG['weight_decay'], COFIG['epochs'], opt_cls=COFIG['optimizer'])
-    writer, ckpt = _make_writer_and_ckpt()
-    print(f'Training {COFIG["epochs"]} epochs on {T.DEVICE}...')
-    T.print_header()
-    best = T.train(model, (train_loader, val_loader), criterion,
-                   optimizer, scheduler, COFIG['epochs'], writer, ckpt,
-                   squeeze_channel=True)
-    print(f'\nBest validation accuracy: {best:.4f}')
+    extra_kw = _build_pathway_kwargs()
+    best_acc, ckpt, best_params = T.train_with_tuning(
+        COFIG, DATA_DIR, squeeze_channel=True,
+        n_trials=N_TRIALS, tune_epochs=TUNE_EPOCHS,
+        extra_model_kwargs=extra_kw)
+    T.save_hyperparameters('CellTypeTOSICA', best_params, COFIG)
+    metrics = T.evaluate(COFIG, DATA_DIR, ckpt, squeeze_channel=True)
+    T.append_results_csv('Transformer', metrics)
 
 
 if __name__ == '__main__':

@@ -7,29 +7,39 @@ from torch.utils.data import Dataset
 from .cell_preprocess import preprocess_hvg
 from sklearn.preprocessing import LabelEncoder
 
-class GeneExpressionDataset(Dataset):
-    """Wraps an (N, G) expression matrix and integer labels as a PyTorch Dataset."""
-    
-    def __init__(self, X: np.ndarray, y: np.ndarray, labelencoder: LabelEncoder=None, split=None, gene_names=None, class_names=None):
-        
-        self.X = torch.from_numpy(np.array(X, dtype=np.float32))
-        self.y = torch.from_numpy(np.array(y, dtype=np.int64))
-        self.split = split
-        self.labelencoder: LabelEncoder = labelencoder
-        self.n_classes = len(labelencoder.classes_) if labelencoder else int(self.y.max()) + 1
-        self.class_names = class_names if class_names is not None else (labelencoder.classes_ if labelencoder else np.array([str(i) for i in range(self.n_classes)]))
-        self.gene_names = gene_names
 
-    def to(self, device):
-        self.X = self.X.to(device)
-        self.y = self.y.to(device)
-        return self
+
+class GeneExpressionDataset(Dataset):
+    """Lazy row-wise view over an (N, G) expression matrix stored as .npy.
+
+    X is memory-mapped (mmap_mode='r'), so the full matrix never lives in
+    RAM; __getitem__ copies one row at a time. DataLoader workers inherit
+    the mmap via the OS page cache without per-worker copies.
+    """
+
+    def __init__(self,
+                 X_path: str,
+                 y_path: str,
+                 labelencoder: LabelEncoder=None,
+                 split=None,
+                 gene_names=None,
+                 class_names=None):
+
+        self.X : np.ndarray = np.load(X_path, mmap_mode='r')
+        self.y : np.ndarray = np.load(y_path, mmap_mode='r')
+        self.split: str = split
+        self.labelencoder: LabelEncoder = labelencoder
+        self.n_classes: int = len(labelencoder.classes_) if labelencoder else int(self.y.max()) + 1
+        self.class_names: np.ndarray = class_names if class_names is not None else (labelencoder.classes_ if labelencoder else np.array([str(i) for i in range(self.n_classes)]))
+        self.gene_names: np.ndarray = gene_names
+
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, idx):
-        return self.X[idx].unsqueeze(0), self.y[idx]
+        row = np.array(self.X[idx], dtype=np.float32, copy=True)
+        return torch.from_numpy(row).unsqueeze(0), self.y[idx]
         
     def get_y_labels(self):
         if self.labelencoder:
@@ -59,18 +69,18 @@ def make_split_dataset(data_dir: str, split='train') -> GeneExpressionDataset:
     """
     
     
-    X = np.load(os.path.join(data_dir, f'X_{split}.npy'), mmap_mode='r')
-    y = np.load(os.path.join(data_dir, f'y_{split}.npy'))
+    X_path = os.path.join(data_dir, f'X_{split}.npy')
+    y_path = os.path.join(data_dir, f'y_{split}.npy')
     gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
     class_names = np.load(os.path.join(data_dir, 'class_names.npy'), allow_pickle=True)
         
     le_path = os.path.join(data_dir, 'label_encoder.pkl')
     labelencoder = load_label_encoder(le_path)
 
-    return GeneExpressionDataset(X, y, labelencoder=labelencoder, split=split, gene_names=gene_names, class_names=class_names)
+    return GeneExpressionDataset(X_path=X_path, y_path=y_path, labelencoder=labelencoder, split=split, gene_names=gene_names, class_names=class_names)
 
 
-def make_dataset(data_dir: str, split='train', min_gene_frac: float = 0.01) -> GeneExpressionDataset:
+def make_dataset(data_dir: str, split='train') -> GeneExpressionDataset:
     """Load raw .npy splits, preprocess, return datasets + metadata.
 
     Returns a dict with keys:
@@ -81,9 +91,7 @@ def make_dataset(data_dir: str, split='train', min_gene_frac: float = 0.01) -> G
         'scaler'                — fitted StandardScaler
         'n_classes'             — int
         
-    """
-    ds_val, ds_test, ds_train = None, None, None
-    
+    """    
     if split not in ('train', 'val', 'test'):
         raise ValueError(f"Invalid split '{split}', expected 'train', 'val', 'test'")
     if split == 'test':

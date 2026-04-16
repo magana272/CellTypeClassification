@@ -1,0 +1,17 @@
+accumulation_steps = 1
+batch_size = 4096
+dropout = 0.4137788066524075
+embed_dim = 64
+epochs = 20
+focal_gamma = 0.4673926327824502
+label_smoothing = 0.06092275383467414
+loss = focal
+lr = 0.0032611374692442952
+model = CellTypeTOSICA
+n_heads = 4
+n_hvg = 0
+n_layers = 1
+normalize = log+standard
+optimizer = adam
+seed = 42
+weight_decay = 0.0003039869660261959

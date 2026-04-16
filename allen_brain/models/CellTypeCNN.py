@@ -1,7 +1,6 @@
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
+from torch.utils.checkpoint import checkpoint
 
 
 class MLP_SEBlock(nn.Module):
@@ -22,8 +21,7 @@ class MLP_SEBlock(nn.Module):
         w = self.fc(w).unsqueeze(-1)
         return x * w
 
-    
-    
+
 class ResBlock(nn.Module):
     """Pre-activation residual block: BN -> ReLU -> Conv -> BN -> ReLU -> Conv + SE."""
 
@@ -49,50 +47,54 @@ class ResBlock(nn.Module):
 
 
 class CellTypeCNN(nn.Module):
-    """Residual 1D-CNN with widening channels, SE attention, and dual-pool head."""
+    """Residual 1D-CNN with variable depth, widening channels, SE attention, and dual-pool head."""
 
-    def __init__(self, seq_len: int, n_classes: int, dropout: float = 0.3):
+    def __init__(self, seq_len: int, n_classes: int, dropout: float = 0.1,
+                 n_stages: int = 3, use_checkpointing: bool = False):
         super().__init__()
+        self.use_checkpointing = use_checkpointing
         self.stem = nn.Sequential(
-            nn.Conv1d(1, 64, kernel_size=15, stride=2, padding=7, bias=False),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(1, 32, kernel_size=15, stride=2, padding=7, bias=False),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
         )
-        self.stage1 = nn.Sequential(
-            ResBlock(64, 96, kernel=7, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
-        self.stage2 = nn.Sequential(
-            ResBlock(96, 160, kernel=5, dropout=dropout),
-            ResBlock(160, 160, kernel=5, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
-        self.stage3 = nn.Sequential(
-            ResBlock(160, 256, kernel=3, dropout=dropout),
-            ResBlock(256, 256, kernel=3, dropout=dropout),
-            nn.MaxPool1d(3),
-        )
-        self.stage4 = ResBlock(256, 256, kernel=3, dropout=dropout)
+
+        # Channel schedule: double every other stage, cap at 256
+        channels = [min(32 * 2 ** (i // 2), 256) for i in range(n_stages)]
+        # Kernel schedule: start at 7, decrease to 3
+        kernels = [max(7 - 2 * i, 3) for i in range(n_stages)]
+
+        stages = []
+        in_ch = 32  # stem output
+        for ch, k in zip(channels, kernels):
+            stages.append(nn.Sequential(
+                ResBlock(in_ch, ch, kernel=k, dropout=dropout),
+                nn.MaxPool1d(3),
+            ))
+            in_ch = ch
+        self.stages = nn.ModuleList(stages)
 
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
         self.max_pool = nn.AdaptiveMaxPool1d(1)
 
+        head_dim = 2 * channels[-1]  # avg + max pool concat
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.LayerNorm(512),
+            nn.LayerNorm(head_dim),
             nn.Dropout(dropout),
-            nn.Linear(512, 256),
+            nn.Linear(head_dim, head_dim // 2),
             nn.ReLU(),
-            nn.LayerNorm(256),
+            nn.LayerNorm(head_dim // 2),
             nn.Dropout(dropout),
-            nn.Linear(256, n_classes),
+            nn.Linear(head_dim // 2, n_classes),
         )
 
     def forward(self, x):
         x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-        x = self.stage4(x)
+        for stage in self.stages:
+            if self.use_checkpointing and self.training:
+                x = checkpoint(stage, x, use_reentrant=False)
+            else:
+                x = stage(x)
         x = torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
         return self.classifier(x)

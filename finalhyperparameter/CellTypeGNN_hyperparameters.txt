@@ -1,0 +1,15 @@
+batch_size = 256
+dropout = 0.3579862546605289
+epochs = 200
+hidden_dim = 128
+k_neighbors = 9
+label_smoothing = 0.043684371029706286
+loss = cross_entropy
+lr = 0.0010074238942079333
+model = CellTypeGNN
+n_hvg = 0
+n_layers = 2
+normalize = standard
+optimizer = adam
+seed = 42
+weight_decay = 7.790143126276235e-07

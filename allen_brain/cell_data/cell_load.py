@@ -1,12 +1,18 @@
 import gc
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 import polars as pl
+from rich.console import Console
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+
+console = Console()
+
+
 
 DEFAULT_10X_PATHS = {
     'matrix': 'data/10x/matrix.csv',
@@ -48,7 +54,7 @@ def load_metadata(path: str) -> pd.DataFrame:
     counts = meta['subclass_label'].value_counts()
     keep = counts[counts >= MIN_CELLS_PER_CLASS].index
     meta = meta[meta['subclass_label'].isin(keep)].reset_index(drop=True)
-    print(f'Metadata: {len(meta):,} cells, {meta["subclass_label"].nunique()} classes')
+    console.print(f'Metadata: {len(meta):,} cells, {meta["subclass_label"].nunique()} classes')
     return meta
 
 
@@ -70,7 +76,7 @@ def cache_matrix(csv_path: str):
     mat_path, names_path, genes_path = root + '.npy', root + '_cells.npy', root + '_genes.npy'
     if os.path.exists(mat_path) and os.path.exists(names_path) and os.path.exists(genes_path):
         return
-    print(f'Caching {csv_path} -> {mat_path} (first run only)')
+    console.print(f'Caching {csv_path} -> {mat_path} (first run only)')
     header = pl.read_csv(csv_path, n_rows=0).columns
     name_col, gene_cols = header[0], header[1:]
     df = pl.read_csv(csv_path, schema_overrides={name_col: pl.Utf8, **{c: pl.Float32 for c in gene_cols}}, rechunk=False)
@@ -89,20 +95,19 @@ def load_matrix(csv_path: str, sample_names: np.ndarray) -> tuple[np.ndarray, np
     gene_names = np.load(root + '_genes.npy')
     order = np.argsort(names_full)
     row_map = order[np.searchsorted(names_full, sample_names, sorter=order)]
-    print(f'Expression matrix: ({len(sample_names)}, {X_mmap.shape[1]})')
+    console.print(f'Expression matrix: ({len(sample_names)}, {X_mmap.shape[1]})')
     return X_mmap, row_map, gene_names
 
 
 def load_dataset(paths: dict, seed: int = 42) -> str:
     out_dir = paths['dir']
     if os.path.exists(os.path.join(out_dir, 'X_train.npy')):
-        print(f'Splits already exist in {out_dir}')
+        console.print(f'Splits already exist in {out_dir}')
         return out_dir
 
     meta = load_metadata(paths['metadata'])
     le = LabelEncoder()
     y = le.fit_transform(meta['subclass_label'].values)
-
     idx_train, idx_val, idx_test, y_train, y_val, y_test = split_indices(y, seed)
     X_mmap, row_map, gene_names = load_matrix(paths['matrix'], meta['sample_name'].values)
 
@@ -110,7 +115,13 @@ def load_dataset(paths: dict, seed: int = 42) -> str:
     for name, idx, y_split in [('train', idx_train, y_train), ('val', idx_val, y_val), ('test', idx_test, y_test)]:
         mmap_rows = row_map[idx]
         sort_order = np.argsort(mmap_rows)
-        np.save(os.path.join(out_dir, f'X_{name}.npy'), np.ascontiguousarray(X_mmap[mmap_rows[sort_order]]))
+        sorted_rows = mmap_rows[sort_order]
+        mm = np.lib.format.open_memmap(
+            os.path.join(out_dir, f'X_{name}.npy'),
+            mode='w+', dtype=X_mmap.dtype, shape=(len(sorted_rows), X_mmap.shape[1]),
+        )
+        np.take(X_mmap, sorted_rows, axis=0, out=mm)
+        del mm
         np.save(os.path.join(out_dir, f'y_{name}.npy'), y_split[sort_order])
     del X_mmap; gc.collect()
 
@@ -118,7 +129,7 @@ def load_dataset(paths: dict, seed: int = 42) -> str:
     np.save(os.path.join(out_dir, 'class_names.npy'), le.classes_)
     with open(os.path.join(out_dir, 'label_encoder.pkl'), 'wb') as f:
         pickle.dump(le, f)
-    print(f'Saved splits to {out_dir}')
+    console.print(f'[green]Saved[/green] splits to {out_dir}')
     return out_dir
 
 

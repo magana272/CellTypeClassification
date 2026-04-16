@@ -1,0 +1,14 @@
+accumulation_steps = 1
+batch_size = 16384
+dropout = 0.2815132947852186
+epochs = 30
+label_smoothing = 0.014957533748932496
+loss = cross_entropy
+lr = 0.004124639312129424
+model = CellTypeCNN
+n_hvg = 3000
+n_stages = 4
+normalize = log
+optimizer = adam
+seed = 42
+weight_decay = 0.00016126521335895608
