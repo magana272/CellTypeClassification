@@ -2,7 +2,7 @@ from allen_brain.models import train as T
 
 SEED = 42
 BATCH_SIZE = 2048
-ACCUMULATION_STEPS = 16  #
+ACCUMULATION_STEPS = 4  # effective batch = 2048 * 4 = 8192
 N_HVG = 2000
 N_HVG_RANGE = (1000, 3000, 500)
 DATA_DIR = 'data/10x'
