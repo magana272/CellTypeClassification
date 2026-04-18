@@ -17,9 +17,6 @@ from .CellTypeAttention import TOSICA, build_pathway_mask
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Random cell selection
-# ---------------------------------------------------------------------------
 
 def select_random_cells(n_cells, n_select=5000, seed=42):
     """Return sorted indices of a random subset of cells."""
@@ -28,9 +25,6 @@ def select_random_cells(n_cells, n_select=5000, seed=42):
     return np.sort(idx)
 
 
-# ---------------------------------------------------------------------------
-# Attention collection
-# ---------------------------------------------------------------------------
 
 @torch.no_grad()
 def collect_attention(model, loader, device, squeeze_channel=True):
@@ -60,9 +54,6 @@ def collect_attention(model, loader, device, squeeze_channel=True):
             np.concatenate(all_probs))
 
 
-# ---------------------------------------------------------------------------
-# Scanpy-style attention embedding pipeline (paper Methods section)
-# ---------------------------------------------------------------------------
 
 def attention_umap(attn_matrix, labels, class_names,
                    n_pcs=30, n_neighbors=15, min_dist=0.3):

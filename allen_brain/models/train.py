@@ -42,9 +42,6 @@ _OPTIMIZERS: dict[str, type[optim.Optimizer]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Standalone utility functions
-# ---------------------------------------------------------------------------
 
 def _resolve_optimizer(name_or_cls: str | type[optim.Optimizer]) -> type[optim.Optimizer]:
     """Resolve optimizer string or class to a class."""
@@ -366,9 +363,6 @@ def train(model: nn.Module,
     return best_acc
 
 
-# ---------------------------------------------------------------------------
-# Model kwargs persistence (so evaluate can reconstruct the exact architecture)
-# ---------------------------------------------------------------------------
 
 def _save_model_kwargs(ckpt_dir: str, model_kw: dict[str, Any]) -> None:
     """Save model constructor kwargs as JSON next to the checkpoint."""
@@ -404,9 +398,6 @@ def _load_model_kwargs(ckpt_path: str, model_name: str | None = None) -> dict[st
     return {}
 
 
-# ---------------------------------------------------------------------------
-# Hyperparameter & results persistence
-# ---------------------------------------------------------------------------
 
 def find_best_ckpt(model_name: str, data_tag: str | None = None) -> str | None:
     """Find the most recent best_model.pt for a given model name.
@@ -495,9 +486,6 @@ def append_results_csv(model_name: str, metrics: EvalMetrics | dict[str, Any],
     console.print(f'Results for {model_name} written to {csv_path}')
 
 
-# ---------------------------------------------------------------------------
-# Evaluation helpers
-# ---------------------------------------------------------------------------
 
 def _save_confusion_matrix(cm: np.ndarray, class_names: list[str],
                            save_path: str) -> None:
@@ -592,9 +580,6 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray,
     )
 
 
-# ---------------------------------------------------------------------------
-# Trainer class — orchestration entry-points that depend on ExperimentConfig
-# ---------------------------------------------------------------------------
 
 class Trainer:
     """High-level training orchestrator backed by an :class:`ExperimentConfig`."""
@@ -1076,92 +1061,3 @@ class Trainer:
         save_dir = os.path.dirname(ckpt_path)
         return _compute_metrics(y_true, y_pred, class_names, save_dir)
 
-
-# ---------------------------------------------------------------------------
-# Backward-compat wrapper functions (delegate to Trainer)
-# ---------------------------------------------------------------------------
-
-def make_dataloaders(data_dir: str, batch_size: int,
-                     drop_last_train: bool = True, device: torch.device = DEVICE,
-                     n_hvg: int | None = None,
-                     normalize: str | None = None,
-                     ) -> tuple[DataLoader, DataLoader, np.ndarray | None, StandardScaler | None]:
-    ecfg = ExperimentConfig(model='_compat', batch_size=batch_size)
-    return Trainer(ecfg).make_dataloaders(data_dir, drop_last_train, device, n_hvg, normalize)
-
-
-def train_with_tuning(cfg: ExperimentConfig | dict[str, Any], data_dir: str,
-                      squeeze_channel: bool,
-                      n_trials: int = 15, tune_epochs: int = 5,
-                      n_hvg_range: tuple[int, int, int] | None = None,
-                      extra_model_kwargs: dict[str, Any] | None = None,
-                      ) -> tuple[float, str, dict[str, Any]]:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return Trainer(ecfg).train_with_tuning(
-        data_dir, squeeze_channel, n_trials=n_trials, tune_epochs=tune_epochs,
-        n_hvg_range=n_hvg_range, extra_model_kwargs=extra_model_kwargs)
-
-
-def train_with_grid(cfg: ExperimentConfig | dict[str, Any], data_dir: str,
-                    squeeze_channel: bool,
-                    grid: list[dict[str, Any]], tune_epochs: int,
-                    extra_model_kwargs: dict[str, Any] | None = None,
-                    ) -> tuple[float, str, dict[str, Any]]:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return Trainer(ecfg).train_with_grid(
-        data_dir, squeeze_channel, grid, tune_epochs,
-        extra_model_kwargs=extra_model_kwargs)
-
-
-def train_single(cfg: ExperimentConfig | dict[str, Any], data_dir: str,
-                 squeeze_channel: bool,
-                 extra_model_kwargs: dict[str, Any] | None = None,
-                 hp_dir: str = 'finalhyperparameter',
-                 ) -> tuple[float, str, dict[str, Any]]:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return Trainer(ecfg).train_single(
-        data_dir, squeeze_channel, extra_model_kwargs=extra_model_kwargs, hp_dir=hp_dir)
-
-
-def evaluate(cfg: ExperimentConfig | dict[str, Any], data_dir: str,
-             ckpt_path: str, squeeze_channel: bool = False,
-             extra_model_kwargs: dict[str, Any] | None = None,
-             ) -> EvalMetrics:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return Trainer(ecfg).evaluate(
-        data_dir, ckpt_path, squeeze_channel=squeeze_channel,
-        extra_model_kwargs=extra_model_kwargs)
-
-
-def run_hparam_search(cfg: ExperimentConfig | dict[str, Any],
-                      ds: GeneExpressionDataset,
-                      loaders: tuple[DataLoader, DataLoader],
-                      squeeze_channel: bool,
-                      n_trials: int = 15, tune_epochs: int = 5,
-                      data_dir: str | None = None,
-                      n_hvg_range: tuple[int, int, int] | None = None,
-                      extra_model_kwargs: dict[str, Any] | None = None,
-                      ) -> dict[str, Any] | None:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return Trainer(ecfg).run_hparam_search(
-        ds, loaders, squeeze_channel, n_trials=n_trials, tune_epochs=tune_epochs,
-        data_dir=data_dir, n_hvg_range=n_hvg_range,
-        extra_model_kwargs=extra_model_kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Backward compatibility: GNN training moved to gnn_train.
-# Lazy re-exports via __getattr__ to avoid circular import.
-# ---------------------------------------------------------------------------
-_GNN_NAMES = frozenset({
-    'train_graph', 'train_graph_single', 'train_graph_with_tuning',
-    'run_graph_hparam_search', 'evaluate_graph',
-    '_graph_step', '_graph_eval', '_collect_graph_probabilities',
-})
-
-
-def __getattr__(name):
-    if name in _GNN_NAMES:
-        import allen_brain.models.gnn_train as _gnn
-        return getattr(_gnn, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

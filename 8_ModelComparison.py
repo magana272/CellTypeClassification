@@ -15,7 +15,7 @@ from allen_brain.TOSICA import TOSICA_model
 # My implemented models
 from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOSICA
 from allen_brain.models.CellTypeCNN import CellTypeCNN
-from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
+from allen_brain.models.CellTypeGNN import CellTypeGNN, GraphBuilder
 from allen_brain.models.CellTypeMLP import MLP_Model
 from allen_brain.TOSICA.train import todense
 # Torch imports
@@ -345,7 +345,7 @@ def fit_model(adata: AnnData, gmt_path: str | None, project: str | None = None, 
         train_mask: torch.Tensor = torch.zeros(n_total, dtype=torch.bool)
         train_mask[:n_train] = True
         val_mask: torch.Tensor = ~train_mask
-        edge_index: torch.Tensor = build_knn_edges(X_all, k=15)
+        edge_index: torch.Tensor = GraphBuilder.build_knn_edges(X_all, k=15)
         graph_data: Data = Data(
             x=torch.from_numpy(X_all),
             edge_index=edge_index,
@@ -421,9 +421,6 @@ def _instantiate_model(model_type: str, num_genes: int, num_classes: int, mask: 
         raise ValueError('Invalid model type: {}'.format(model_type))
 
 
-# ---------------------------------------------------------------------------
-# Confidence calibration
-# ---------------------------------------------------------------------------
 
 def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 15) -> float:
     """Expected Calibration Error.
@@ -516,13 +513,18 @@ def plot_confidence_distributions(model_results: dict[str, dict[str, Any]], save
 
 def main() -> dict[str, AnnData]:
 
-    if not os.path.exists('data/10x/data.h5ad'):
-        adata: AnnData = sc.read_csv('data/10x/matrix.csv')
-        meta: pd.DataFrame = pd.read_csv('data/10x/metadata.csv', index_col=0)
-        adata.obs = meta.loc[adata.obs_names]
-        adata.write_h5ad('data/10x/data.h5ad')
-    else:
+    if os.path.exists('data/10x/data.h5ad'):
         adata: AnnData = sc.read_h5ad('data/10x/data.h5ad')
+    else:
+        X_mat: np.ndarray = np.load('data/10x/matrix.npy', mmap_mode='r')
+        cells: np.ndarray = np.load('data/10x/matrix_cells.npy', allow_pickle=True)
+        genes: np.ndarray = np.load('data/10x/matrix_genes.npy', allow_pickle=True)
+        meta: pd.DataFrame = pd.read_csv('data/10x/metadata.csv', index_col=0)
+        obs: pd.DataFrame = meta.reindex(cells).reset_index()
+        obs.index = obs.index.astype(str)
+        var: pd.DataFrame = pd.DataFrame(index=genes)
+        adata = AnnData(np.asarray(X_mat), obs=obs, var=var)
+        adata.write_h5ad('data/10x/data.h5ad')
     models: list[str] = ['TOSICA', 'my_TOSICA', 'MLP', 'GNN', 'CNN']
 
     #  Train all models
@@ -580,7 +582,7 @@ def main() -> dict[str, AnnData]:
         #  Build GNN graph if needed
         edge_index: torch.Tensor | None = None
         if model_type == 'GNN':
-            edge_index = build_knn_edges(exp_test_np, k=15).to(device)
+            edge_index = GraphBuilder.build_knn_edges(exp_test_np, k=15).to(device)
 
         #  Run inference on test set
         all_line: int = len(exp_test)

@@ -20,8 +20,8 @@ from allen_brain.models.config import EvalMetrics
 from allen_brain.cell_data.cell_load import ALL_DATASETS
 from allen_brain.cell_data.cell_dataset import make_dataset
 from allen_brain.cell_data.cell_preprocess import align_genes
-from allen_brain.models.CellTypeAttention import build_pathway_mask
-from allen_brain.models.CellTypeGNN import build_eval_graph
+from allen_brain.models.CellTypeAttention import PathwayMaskBuilder
+from allen_brain.models.CellTypeGNN import GraphBuilder
 
 K_NEIGHBORS = 15
 BATCH_SIZE = 1024
@@ -45,9 +45,6 @@ MODELS = {
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Data helpers (generalised from the old single-pair version)
-# ---------------------------------------------------------------------------
 
 def _load_eval_data(
     data_dir: str,
@@ -109,9 +106,6 @@ def _apply_saved_normalization(X_al: np.ndarray, ckpt_path: str) -> np.ndarray:
     return X_al
 
 
-# ---------------------------------------------------------------------------
-# Per-model evaluation
-# ---------------------------------------------------------------------------
 
 def _eval_standard_model(
     model_name: str,
@@ -169,7 +163,7 @@ def _eval_gnn_model(
     n_classes_train: int = len(np.load(os.path.join(train_dir, 'class_names.npy'),
                                        allow_pickle=True))
 
-    data = build_eval_graph(X_al, y_eval, k_neighbors=K_NEIGHBORS).to(T.DEVICE)
+    data = GraphBuilder.build_eval_graph(X_al, y_eval, k_neighbors=K_NEIGHBORS).to(T.DEVICE)
     saved_kw: dict[str, Any] = T._load_model_kwargs(ckpt_path, model_name='CellTypeGNN')
     model: torch.nn.Module = T.build_model('CellTypeGNN', n_features, n_classes_train, **saved_kw)
     model.load_state_dict(torch.load(ckpt_path, map_location=T.DEVICE,
@@ -185,16 +179,13 @@ def _eval_gnn_model(
 def _transformer_extra_kwargs(gene_names: np.ndarray) -> dict[str, Any]:
     mask: torch.Tensor
     n_pathways: int
-    mask, n_pathways = build_pathway_mask(
-        [str(g) for g in gene_names],
+    mask, n_pathways = PathwayMaskBuilder(
         gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
-        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
+        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE,
+    ).build_mask([str(g) for g in gene_names])
     return dict(mask=mask, n_pathways=n_pathways)
 
 
-# ---------------------------------------------------------------------------
-# N x N evaluation
-# ---------------------------------------------------------------------------
 
 def _cross_eval_pair(
     train_dir: str,
@@ -242,9 +233,6 @@ def _cross_eval_pair(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Visualisation
-# ---------------------------------------------------------------------------
 
 def _plot_cross_eval_heatmaps(
     all_results: dict[tuple[str, str], dict[str, EvalMetrics | None]],
@@ -286,9 +274,6 @@ def _plot_cross_eval_heatmaps(
     console.print(f'[green]Saved[/green] {SAVE_DIR}/cross_eval_{metric}.png')
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     console.print(Panel(

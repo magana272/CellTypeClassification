@@ -3,7 +3,7 @@ import numpy as np
 from allen_brain.models import train as T
 from allen_brain.models.config import ExperimentConfig
 from allen_brain.models.gnn_train import GraphTrainer
-from allen_brain.models.CellTypeGNN import build_graph_data, masked_class_weights
+from allen_brain.models.CellTypeGNN import GraphBuilder
 
 DATA_DIR = 'data/10x'
 K_NEIGHBORS = 10
@@ -25,11 +25,11 @@ cfg = ExperimentConfig(
 
 
 def main() -> None:
-    data = build_graph_data(DATA_DIR, k_neighbors=K_NEIGHBORS,
-                            normalize='log+standard').to(T.DEVICE)
+    gb = GraphBuilder(k_neighbors=K_NEIGHBORS, normalize='log+standard')
+    data = gb.build_graph_data(DATA_DIR).to(T.DEVICE)
     n_classes: int = int(data.y.max().item()) + 1
     class_names: list[str] = list(np.load(f'{DATA_DIR}/class_names.npy', allow_pickle=True))
-    weights = masked_class_weights(data.y, data.train_mask, n_classes)
+    weights = GraphBuilder.masked_class_weights(data.y, data.train_mask, n_classes)
     n_features: int = data.x.shape[1]
     del data
 
@@ -42,8 +42,8 @@ def main() -> None:
     best_normalize: str | None = best_params.get('normalize', 'log+standard')
     if best_normalize == 'none':
         best_normalize = None
-    eval_data = build_graph_data(DATA_DIR, k_neighbors=best_k,
-                                 normalize=best_normalize).to(T.DEVICE)
+    eval_data = GraphBuilder(k_neighbors=best_k,
+                             normalize=best_normalize).build_graph_data(DATA_DIR).to(T.DEVICE)
     metrics = trainer.evaluate(eval_data, ckpt, n_features, n_classes,
                                class_names=class_names)
     T.append_results_csv('GNN', metrics)

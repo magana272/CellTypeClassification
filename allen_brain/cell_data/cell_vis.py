@@ -51,9 +51,6 @@ def _palette(n: int) -> list[tuple[float, ...]]:
     return sns.color_palette('tab20', n) if n <= 20 else sns.color_palette('husl', n)
 
 
-# ---------------------------------------------------------------------------
-# DatasetVisualizer class
-# ---------------------------------------------------------------------------
 
 class DatasetVisualizer:
     """Visualization suite for GeneExpressionDataset."""
@@ -364,9 +361,6 @@ class DatasetVisualizer:
         return top_hvg_names, top_hvg_ratios
 
 
-# ---------------------------------------------------------------------------
-# Standalone helpers (used by DatasetVisualizer and backward-compat wrappers)
-# ---------------------------------------------------------------------------
 
 def get_top_hvg_genes(
     X: np.ndarray, gene_names: np.ndarray, top_n: int = 20,
@@ -411,62 +405,282 @@ def _fit_cv2_trend(
     return trend_log_mean, trend_log_cv2, trend_fn
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat module-level wrappers
-# ---------------------------------------------------------------------------
 
-def plot_class_distribution(
-    ds: cell_dataset.GeneExpressionDataset, save_path: str | None = None,
-) -> None:
-    DatasetVisualizer(ds).plot_class_distribution(save_path)
+class ModelComparisonVisualizer:
+    """Plots for comparing multiple trained models (ROC, confusion, F1, etc.)."""
 
+    def __init__(
+        self,
+        results: dict[str, ModelPredictions],
+        fig_dir: str = 'figures',
+    ) -> None:
+        self.results = results
+        self.fig_dir = fig_dir
+        os.makedirs(fig_dir, exist_ok=True)
 
-def plot_pca(
-    ds: cell_dataset.GeneExpressionDataset,
-    seed: int = 42,
-    n_components: int = 50,
-    save_path: str | None = None,
-    file_name: str = 'fig_pca.png',
-) -> tuple[PCA, np.ndarray]:
-    return DatasetVisualizer(ds, seed=seed).plot_pca(n_components, save_path, file_name)
+    # -- ROC ----------------------------------------------------------------
 
+    def plot_roc_per_model(self, save_path: str | None = None) -> None:
+        """2x2 grid of per-class ROC curves, one subplot per model."""
+        if not self.results:
+            return
+        if save_path is None:
+            save_path = os.path.join(self.fig_dir, 'roc_curves_all_models.png')
+        _ensure_dir(save_path)
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        axes_flat = axes.flatten()
+        for idx, (name, r) in enumerate(self.results.items()):
+            if idx >= 4:
+                break
+            ax = axes_flat[idx]
+            y_bin = label_binarize(r.y_true, classes=range(r.n_classes))
+            for c in range(r.n_classes):
+                fpr, tpr, _ = roc_curve(y_bin[:, c], r.y_probs[:, c])
+                auc_val = roc_auc_score(y_bin[:, c], r.y_probs[:, c])
+                ax.plot(fpr, tpr, alpha=0.5,
+                        label=f'{r.class_names[c]} ({auc_val:.2f})')
+            ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
+            macro_auc = roc_auc_score(y_bin, r.y_probs, average='macro',
+                                      multi_class='ovr')
+            ax.set_title(f'{name} (macro AUC={macro_auc:.4f})')
+            ax.set_xlabel('FPR')
+            ax.set_ylabel('TPR')
+            ax.legend(fontsize=6, loc='lower right')
+        for idx in range(len(self.results), 4):
+            axes_flat[idx].axis('off')
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {save_path}')
 
-def plot_umap(
-    ds: cell_dataset.GeneExpressionDataset,
-    X_pca: np.ndarray | None = None,
-    max_cells: int = 1000,
-    seed: int = 42,
-    n_neighbors: int = 30,
-    min_dist: float = 0.3,
-    save_path: str | None = None,
-) -> np.ndarray:
-    return DatasetVisualizer(ds, seed=seed).plot_umap(X_pca, max_cells, n_neighbors, min_dist, save_path)
+    def plot_roc_comparison(self, save_path: str | None = None) -> None:
+        """Single plot with macro-avg ROC per model overlaid."""
+        if not self.results:
+            return
+        if save_path is None:
+            save_path = os.path.join(self.fig_dir, 'roc_curves_comparison.png')
+        _ensure_dir(save_path)
+        fig, ax = plt.subplots(figsize=(8, 7))
+        for name, r in self.results.items():
+            y_bin = label_binarize(r.y_true, classes=range(r.n_classes))
+            all_fpr = np.linspace(0, 1, 200)
+            mean_tpr = np.zeros_like(all_fpr)
+            for c in range(r.n_classes):
+                fpr, tpr, _ = roc_curve(y_bin[:, c], r.y_probs[:, c])
+                mean_tpr += np.interp(all_fpr, fpr, tpr)
+            mean_tpr /= r.n_classes
+            macro_auc = roc_auc_score(y_bin, r.y_probs, average='macro',
+                                      multi_class='ovr')
+            ax.plot(all_fpr, mean_tpr, linewidth=2,
+                    label=f'{name} (AUC={macro_auc:.4f})')
+        ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title('Macro-Average ROC Comparison')
+        ax.legend(loc='lower right', fontsize=9)
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {save_path}')
 
+    # -- Confusion matrices -------------------------------------------------
 
-def plot_heatmap(
-    ds: cell_dataset.GeneExpressionDataset,
-    gene_names: np.ndarray,
-    n_genes: int = 10,
-    n_cells_per_type: int = 50,
-    seed: int = 42,
-    save_path: str | None = None,
-) -> Any:
-    return DatasetVisualizer(ds, seed=seed).plot_heatmap(gene_names, n_genes, n_cells_per_type, save_path)
+    def plot_confusion_matrices(self, save_path: str | None = None) -> None:
+        """Grid of normalized confusion matrix heatmaps, one per model."""
+        if not self.results:
+            return
+        if save_path is None:
+            save_path = os.path.join(self.fig_dir,
+                                     'confusion_matrices_comparison.png')
+        _ensure_dir(save_path)
+        n = len(self.results)
+        ncols = min(n, 4)
+        nrows = (n + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5 * nrows))
+        axes_flat = np.atleast_1d(axes).flat
+        for idx, (name, r) in enumerate(self.results.items()):
+            ax = axes_flat[idx]
+            cm = sk_confusion_matrix(r.y_true, r.y_pred, normalize='true')
+            sns.heatmap(cm, annot=False, cmap='Blues', vmin=0, vmax=1,
+                        xticklabels=r.class_names,
+                        yticklabels=r.class_names, ax=ax)
+            ax.tick_params(axis='both', labelsize=5)
+            ax.set_title(name)
+            ax.set_xlabel('Predicted')
+            ax.set_ylabel('True')
+        for idx in range(n, nrows * ncols):
+            axes_flat[idx].axis('off')
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {save_path}')
 
+    # -- Per-class F1 -------------------------------------------------------
 
-def plot_violin(
-    ds: cell_dataset.GeneExpressionDataset,
-    gene_names: np.ndarray,
-    top_n: int = 6,
-    save_path: str | None = None,
-) -> None:
-    DatasetVisualizer(ds).plot_violin(gene_names, top_n, save_path)
+    def plot_per_class_f1(self, save_path: str | None = None) -> None:
+        """Grouped bar chart of per-class F1 across models."""
+        if not self.results:
+            return
+        if save_path is None:
+            save_path = os.path.join(self.fig_dir,
+                                     'per_class_f1_comparison.png')
+        _ensure_dir(save_path)
+        first = next(iter(self.results.values()))
+        class_names = first.class_names
+        n_classes = len(class_names)
+        model_names = list(self.results.keys())
+        f1_data: dict[str, list[float]] = {}
+        for name, r in self.results.items():
+            report = classification_report(
+                r.y_true, r.y_pred, target_names=class_names,
+                output_dict=True, zero_division=0)
+            f1_data[name] = [report[cn]['f1-score'] for cn in class_names]
 
+        x = np.arange(n_classes)
+        width = 0.8 / len(model_names)
+        fig, ax = plt.subplots(figsize=(14, 6))
+        for i, name in enumerate(model_names):
+            ax.bar(x + i * width, f1_data[name], width, label=name)
+        ax.set_xticks(x + width * (len(model_names) - 1) / 2)
+        ax.set_xticklabels(class_names, rotation=45, ha='right')
+        ax.set_ylabel('F1 Score')
+        ax.set_title('Per-Class F1 Score Comparison')
+        ax.legend()
+        ax.set_ylim(0, 1.05)
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {save_path}')
 
-def plot_cv2(
-    ds: cell_dataset.GeneExpressionDataset,
-    gene_names: np.ndarray,
-    n_top: int = 1000,
-    save_path: str | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    return DatasetVisualizer(ds).plot_cv2(gene_names, n_top, save_path)
+    # -- Accuracy / metrics bar chart from CSV ------------------------------
+
+    @staticmethod
+    def plot_accuracy_comparison(
+        save_dir: str,
+        csv_path: str = 'results.csv',
+    ) -> None:
+        """Grouped bar chart of accuracy, F1-macro, F1-weighted from CSV."""
+        if not os.path.exists(csv_path):
+            console.print(f'[yellow]{csv_path} not found[/yellow], skipping')
+            return
+        df = pd.read_csv(csv_path)
+        metrics = ['accuracy', 'f1_macro', 'f1_weighted']
+        available = [m for m in metrics if m in df.columns]
+        if not available:
+            return
+        x = np.arange(len(df))
+        width = 0.25
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for i, m in enumerate(available):
+            ax.bar(x + i * width, df[m], width,
+                   label=m.replace('_', ' ').title())
+        ax.set_xticks(x + width)
+        ax.set_xticklabels(df['model'])
+        ax.set_ylabel('Score')
+        ax.set_title('Model Performance Comparison')
+        ax.legend()
+        ax.set_ylim(0, 1.05)
+        plt.tight_layout()
+        path = os.path.join(save_dir, 'accuracy_comparison.png')
+        plt.savefig(path, dpi=150)
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {path}')
+
+    # -- Metrics table as figure --------------------------------------------
+
+    @staticmethod
+    def plot_metrics_table(
+        save_dir: str,
+        csv_path: str = 'results.csv',
+    ) -> None:
+        """Render a metrics table as a figure."""
+        if not os.path.exists(csv_path):
+            return
+        df = pd.read_csv(csv_path)
+        num_cols = df.select_dtypes(include=[np.number]).columns
+        df[num_cols] = df[num_cols].round(4)
+        fig, ax = plt.subplots(figsize=(12, 2 + 0.5 * len(df)))
+        ax.axis('off')
+        table = ax.table(cellText=df.values, colLabels=df.columns,
+                         cellLoc='center', loc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1.2, 1.5)
+        plt.title('Model Evaluation Metrics', fontsize=14, pad=20)
+        plt.tight_layout()
+        path = os.path.join(save_dir, 'metrics_table.png')
+        plt.savefig(path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        console.print(f'[green]Saved[/green] {path}')
+
+    # -- Metric heatmap (datasets x models) ---------------------------------
+
+    @staticmethod
+    def plot_metric_heatmap(
+        all_results: dict[str, dict[str, EvalMetrics | None]],
+        metric: str,
+        model_names: list[str],
+        save_dir: str,
+        title: str | None = None,
+        cmap: str = 'YlGn',
+        filename: str | None = None,
+    ) -> None:
+        """Generic datasets-x-models heatmap for any EvalMetrics field."""
+        datasets = list(all_results.keys())
+        matrix = np.full((len(datasets), len(model_names)), np.nan)
+        for i, ds in enumerate(datasets):
+            for j, m in enumerate(model_names):
+                r = all_results[ds].get(m)
+                if r is not None:
+                    matrix[i, j] = getattr(r, metric, np.nan)
+        fig, ax = plt.subplots(
+            figsize=(max(8, len(model_names) * 2), max(4, len(datasets))))
+        sns.heatmap(matrix, annot=True, fmt='.3f', cmap=cmap,
+                    xticklabels=model_names, yticklabels=datasets,
+                    ax=ax, vmin=0, vmax=1)
+        ax.set_title(title or f'{metric} Across Datasets')
+        plt.tight_layout()
+        fname = filename or f'{metric}_heatmap.png'
+        path = os.path.join(save_dir, fname)
+        plt.savefig(path, dpi=150)
+        plt.close()
+        console.print(f'[green]Saved[/green] {path}')
+
+    # -- Confusion matrices from EvalMetrics (multi-dataset) ----------------
+
+    @staticmethod
+    def plot_eval_confusion_matrices(
+        model_results: dict[str, EvalMetrics | None],
+        save_dir: str,
+        suptitle: str | None = None,
+    ) -> None:
+        """Plot confusion matrix grid from EvalMetrics dicts."""
+        items = [(k, v) for k, v in model_results.items()
+                 if v is not None and v.confusion_matrix is not None]
+        if not items:
+            return
+        n = len(items)
+        ncols = min(n, 4)
+        nrows = (n + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(6 * ncols, 5 * nrows))
+        axes_flat = np.atleast_1d(axes).flat
+        for idx, (label, m) in enumerate(items):
+            ax = axes_flat[idx]
+            cm = m.confusion_matrix
+            cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True).clip(1)
+            sns.heatmap(cm_norm, annot=False, cmap='Blues', ax=ax,
+                        vmin=0, vmax=1)
+            ax.set_title(label)
+            ax.set_xlabel('Predicted')
+            ax.set_ylabel('True')
+        for idx in range(n, nrows * ncols):
+            axes_flat[idx].axis('off')
+        if suptitle:
+            fig.suptitle(suptitle, fontsize=14)
+        plt.tight_layout()
+        path = os.path.join(save_dir,
+                            f'{suptitle or "confusion"}_matrices.png')
+        plt.savefig(path, dpi=150)
+        plt.close()
+        console.print(f'[green]Saved[/green] {path}')

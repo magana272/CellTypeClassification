@@ -55,9 +55,6 @@ class MLP_Model(nn.Module):
         return self.classifier(x)
 
 
-# ---------------------------------------------------------------------------
-# Training configuration (used by registry in __init__.py)
-# ---------------------------------------------------------------------------
 
 from typing import Any
 

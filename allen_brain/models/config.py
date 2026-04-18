@@ -16,9 +16,6 @@ import numpy as np
 import optuna
 
 
-# ---------------------------------------------------------------------------
-# Hyperparameter dataclasses
-# ---------------------------------------------------------------------------
 
 @dataclass
 class BaseHParams:
@@ -62,9 +59,6 @@ class TransformerHParams(BaseHParams):
     embed_dim: int = 48
 
 
-# ---------------------------------------------------------------------------
-# Model-kwargs dataclasses (constructor args extracted from hparams)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class BaseModelKwargs:
@@ -99,9 +93,6 @@ class TransformerModelKwargs(BaseModelKwargs):
     embed_dim: int = 48
 
 
-# ---------------------------------------------------------------------------
-# Abstract config base
-# ---------------------------------------------------------------------------
 
 class TrainConfig(ABC):
     """Interface that each model's training configuration must implement."""
@@ -122,9 +113,6 @@ class TrainConfig(ABC):
         ...
 
 
-# ---------------------------------------------------------------------------
-# Experiment-level configuration (replaces raw cfg / COFIG dicts)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ExperimentConfig:
@@ -165,9 +153,6 @@ class ExperimentConfig:
         return hasattr(self, key)
 
 
-# ---------------------------------------------------------------------------
-# Evaluation metrics (replaces raw metrics dicts)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class EvalMetrics:
@@ -203,7 +188,16 @@ class EvalMetrics:
 
 @dataclass
 class ModelPredictions:
-    """Raw model outputs for a single model on a single dataset."""
+    """
+    Raw model outputs for a single model on a single dataset.
+    Parameters:
+        y_true: np.ndarray
+        y_pred: np.ndarray
+        y_probs: np.ndarray
+        class_names: list[str]
+        n_classes: int
+    
+    """
 
     y_true: np.ndarray
     y_pred: np.ndarray

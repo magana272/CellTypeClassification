@@ -27,12 +27,9 @@ from allen_brain.models.train import (
     print_header, print_row, log_epoch,
     load_hyperparameters, _compute_metrics,
 )
-from allen_brain.models.CellTypeGNN import build_graph_data
+from allen_brain.models.CellTypeGNN import GraphBuilder
 
 
-# ---------------------------------------------------------------------------
-# Core graph training loop (module-level, used by both class and wrappers)
-# ---------------------------------------------------------------------------
 
 def _graph_step(
     model: nn.Module,
@@ -101,9 +98,6 @@ def train_graph(
     return best_acc
 
 
-# ---------------------------------------------------------------------------
-# Probability collection helper (module-level)
-# ---------------------------------------------------------------------------
 
 def _collect_graph_probabilities(
     model: nn.Module,
@@ -119,9 +113,6 @@ def _collect_graph_probabilities(
     return probs, labels
 
 
-# ---------------------------------------------------------------------------
-# GraphTrainer class
-# ---------------------------------------------------------------------------
 
 class GraphTrainer:
     """GNN-specific training orchestration backed by an ``ExperimentConfig``."""
@@ -146,9 +137,9 @@ class GraphTrainer:
         def _get_graph(k: int, norm: str | None) -> Data:
             key = (k, norm)
             if key not in graph_cache:
-                graph_cache[key] = build_graph_data(
-                    data_dir, k_neighbors=k,
-                    normalize=norm if norm != 'none' else None).to(self.device)
+                graph_cache[key] = GraphBuilder(
+                    k_neighbors=k,
+                    normalize=norm if norm != 'none' else None).build_graph_data(data_dir).to(self.device)
             return graph_cache[key]
 
         cfg = self.cfg
@@ -218,8 +209,8 @@ class GraphTrainer:
         if normalize == 'none':
             normalize = None
 
-        data: Data = build_graph_data(data_dir, k_neighbors=k_neighbors,
-                                      normalize=normalize).to(self.device)
+        data: Data = GraphBuilder(k_neighbors=k_neighbors,
+                                   normalize=normalize).build_graph_data(data_dir).to(self.device)
 
         model_kw: dict[str, Any] = dict(dropout=dropout)
         for k in ('n_layers', 'hidden_dim'):
@@ -278,8 +269,8 @@ class GraphTrainer:
         if normalize == 'none':
             normalize = None
 
-        data: Data = build_graph_data(data_dir, k_neighbors=k_neighbors,
-                                      normalize=normalize).to(self.device)
+        data: Data = GraphBuilder(k_neighbors=k_neighbors,
+                                   normalize=normalize).build_graph_data(data_dir).to(self.device)
 
         model_kw: dict[str, Any] = dict(dropout=dropout)
         for k in ('n_layers', 'hidden_dim'):
@@ -348,67 +339,3 @@ class GraphTrainer:
             confusion_matrix=raw_metrics.get('confusion_matrix'),
         )
 
-
-# ---------------------------------------------------------------------------
-# Backward-compat module-level wrappers
-# ---------------------------------------------------------------------------
-
-def run_graph_hparam_search(
-    cfg: ExperimentConfig | dict[str, Any],
-    data_dir: str,
-    n_features: int,
-    n_classes: int,
-    weights: torch.Tensor,
-    n_trials: int = 15,
-    tune_epochs: int = 30,
-) -> dict[str, Any] | None:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return GraphTrainer(ecfg).run_hparam_search(
-        data_dir, n_features, n_classes, weights,
-        n_trials=n_trials, tune_epochs=tune_epochs)
-
-
-def train_graph_with_tuning(
-    cfg: ExperimentConfig | dict[str, Any],
-    data_dir: str,
-    n_features: int,
-    n_classes: int,
-    weights: torch.Tensor,
-    n_trials: int = 15,
-    tune_epochs: int = 30,
-) -> tuple[float, str, dict[str, Any]]:
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return GraphTrainer(ecfg).train_with_tuning(
-        data_dir, n_features, n_classes, weights,
-        n_trials=n_trials, tune_epochs=tune_epochs)
-
-
-def train_graph_single(
-    cfg: ExperimentConfig | dict[str, Any],
-    data_dir: str,
-    n_features: int,
-    n_classes: int,
-    weights: torch.Tensor,
-    hp_dir: str = 'finalhyperparameter',
-) -> tuple[float, str, dict[str, Any]]:
-    """Single graph training run using saved best hyperparameters (no search).
-
-    Returns (best_val_acc, ckpt_path, merged_params).
-    """
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return GraphTrainer(ecfg).train_single(
-        data_dir, n_features, n_classes, weights, hp_dir=hp_dir)
-
-
-def evaluate_graph(
-    cfg: ExperimentConfig | dict[str, Any],
-    data: Data,
-    ckpt_path: str,
-    n_features: int,
-    n_classes: int,
-    class_names: list[str] | None = None,
-) -> EvalMetrics:
-    """Load best checkpoint and evaluate graph model on test mask with full metrics."""
-    ecfg = ExperimentConfig(**cfg) if isinstance(cfg, dict) else cfg
-    return GraphTrainer(ecfg).evaluate(
-        data, ckpt_path, n_features, n_classes, class_names=class_names)

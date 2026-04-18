@@ -22,10 +22,8 @@ import seaborn as sns
 
 from allen_brain.models import train as T
 from allen_brain.cell_data.cell_dataset import make_dataset
-from allen_brain.models.CellTypeAttention import (
-    build_pathway_mask, _parse_gmt, _select_pathways,
-)
-from allen_brain.models.CellTypeGNN import build_graph_data
+from allen_brain.models.CellTypeAttention import PathwayMaskBuilder
+from allen_brain.models.CellTypeGNN import GraphBuilder
 
 DATA_DIR: str = 'data/10x'
 SAVE_DIR: str = 'figures'
@@ -37,10 +35,6 @@ MAX_PATHWAYS: int = 300
 MIN_PATHWAY_OVERLAP: int = 5
 MAX_GENE_SET_SIZE: int = 300
 
-
-# ---------------------------------------------------------------------------
-# TOSICA — Pathway Attention
-# ---------------------------------------------------------------------------
 
 def interpret_tosica(save_dir: str) -> None:
     """Extract and visualize pathway attention scores from TOSICA."""
@@ -59,16 +53,15 @@ def interpret_tosica(save_dir: str) -> None:
         ds_test.gene_names = ds_test.gene_names[hvg_idx]
 
     gene_names: list[str] = [str(g) for g in ds_test.gene_names]
+    pw_builder = PathwayMaskBuilder(
+        gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
+        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
     mask: torch.Tensor
     n_pathways: int
-    mask, n_pathways = build_pathway_mask(
-        gene_names, gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
-        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
+    mask, n_pathways = pw_builder.build_mask(gene_names)
 
     # Recover pathway names
-    gmt: dict[str, list[str]] = _parse_gmt(GMT_PATH, max_gene_set_size=MAX_GENE_SET_SIZE)
-    gene_set: set[str] = set(gene_names)
-    kept: list[tuple[str, list[str]]] = _select_pathways(gmt, gene_set, MIN_PATHWAY_OVERLAP, MAX_PATHWAYS)
+    kept: list[tuple[str, list[str]]] = pw_builder.select_pathways(set(gene_names))
     pathway_names: list[str] = [name.replace('REACTOME_', '').replace('_', ' ')[:40]
                      for name, _ in kept]
 
@@ -146,10 +139,6 @@ def interpret_tosica(save_dir: str) -> None:
     console.print('[green]Saved[/green] tosica_top_pathways_per_class.png')
 
 
-# ---------------------------------------------------------------------------
-# GNN — Embedding UMAP
-# ---------------------------------------------------------------------------
-
 def interpret_gnn(save_dir: str) -> None:
     """Visualize GNN node embeddings via UMAP."""
     console.print(Panel('[bold]GNN Embedding UMAP[/bold]',
@@ -167,7 +156,7 @@ def interpret_gnn(save_dir: str) -> None:
 
     saved_kw: dict[str, Any] = T._load_model_kwargs(ckpt, model_name='CellTypeGNN')
     k: int = saved_kw.get('k_neighbors', 15)
-    data = build_graph_data(DATA_DIR, k_neighbors=k).to(T.DEVICE)
+    data = GraphBuilder(k_neighbors=k).build_graph_data(DATA_DIR).to(T.DEVICE)
     n_features: int = data.x.shape[1]
     n_classes: int = int(data.y.max().item()) + 1
     model: nn.Module = T.build_model('CellTypeGNN', n_features, n_classes, **saved_kw)
@@ -227,10 +216,6 @@ def interpret_gnn(save_dir: str) -> None:
     plt.close(fig)
     console.print('[green]Saved[/green] gnn_embedding_correctness.png')
 
-
-# ---------------------------------------------------------------------------
-# MLP — Gene Saliency
-# ---------------------------------------------------------------------------
 
 def _compute_saliency(
     model: nn.Module,
@@ -337,10 +322,6 @@ def interpret_mlp(save_dir: str) -> None:
     _plot_saliency(saliency, gene_names, class_names, 'MLP', save_dir)
 
 
-# ---------------------------------------------------------------------------
-# CNN — Gene Saliency + Filters
-# ---------------------------------------------------------------------------
-
 def interpret_cnn(save_dir: str) -> None:
     """Compute gene saliency and visualize stem filters for CNN."""
     console.print(Panel('[bold]CNN Gene Saliency + Filters[/bold]',
@@ -410,10 +391,6 @@ def interpret_cnn(save_dir: str) -> None:
     console.print('[green]Saved[/green] cnn_stem_filters.png')
 
 
-# ---------------------------------------------------------------------------
-# Cross-Model Gene Importance Comparison
-# ---------------------------------------------------------------------------
-
 def compare_gene_importance(save_dir: str) -> None:
     """Compare top important genes across models."""
     console.print(Panel('[bold]Cross-Model Gene Importance[/bold]',
@@ -472,15 +449,14 @@ def compare_gene_importance(save_dir: str) -> None:
     if ckpt is not None and os.path.exists(GMT_PATH):
         ds = make_dataset(DATA_DIR, split='test')
         gene_names: list[str] = [str(g) for g in ds.gene_names]
-        gmt: dict[str, list[str]] = _parse_gmt(GMT_PATH, max_gene_set_size=MAX_GENE_SET_SIZE)
-        kept: list[tuple[str, list[str]]] = _select_pathways(gmt, set(gene_names), MIN_PATHWAY_OVERLAP, MAX_PATHWAYS)
+        pw_builder = PathwayMaskBuilder(
+            gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
+            max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
+        kept: list[tuple[str, list[str]]] = pw_builder.select_pathways(set(gene_names))
         # Collect mean attention
         mask_t: torch.Tensor
         n_pw: int
-        mask_t, n_pw = build_pathway_mask(gene_names, gmt_path=GMT_PATH,
-                                          min_overlap=MIN_PATHWAY_OVERLAP,
-                                          max_pathways=MAX_PATHWAYS,
-                                          max_gene_set_size=MAX_GENE_SET_SIZE)
+        mask_t, n_pw = pw_builder.build_mask(gene_names)
         # Top pathways by attention -> genes in those pathways
         all_genes: set[str] = set()
         for _, genes in kept[:top_n]:
@@ -520,10 +496,6 @@ def compare_gene_importance(save_dir: str) -> None:
     plt.close(fig)
     console.print('[green]Saved[/green] gene_importance_comparison.png')
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     os.makedirs(SAVE_DIR, exist_ok=True)

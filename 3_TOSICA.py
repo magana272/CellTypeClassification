@@ -16,9 +16,6 @@ import TOSICA
 from allen_brain.cell_data.cell_dataset import make_dataset, GeneExpressionDataset
 from allen_brain.cell_data.cell_preprocess import select_hvg
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 DATA_DIR: str = 'data/10x'
 GMT_PATH: str = 'data/reactome.gmt'
 PROJECT: str = 'tosica_unknown'

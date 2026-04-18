@@ -27,21 +27,19 @@ def _gene_filter(X_val: np.ndarray | scipy.sparse.spmatrix, min_gene_frac: float
 
 
 def select_hvg(X_val_filtered: np.ndarray | scipy.sparse.spmatrix, n_hvg: int) -> np.ndarray:
-    """Top-variance genes from log-normalized data, sorted by descending variance.
-
-    Runs on GPU when available; returns a numpy index array.
-    """
+    """Top-variance genes from log-normalized data, sorted by descending variance."""
     if scipy.sparse.issparse(X_val_filtered):
         X_val_filtered = np.asarray(X_val_filtered.todense())
-    X_t = torch.tensor(np.array(X_val_filtered, copy=True), dtype=torch.float64, device=_DEVICE)
+    X_t = torch.as_tensor(X_val_filtered, dtype=torch.float32)
     lib = X_t.sum(dim=1, keepdim=True).clamp(min=1.0)
-    normed = torch.log1p(X_t / lib * 1e4).float()
+    normed = torch.log1p(X_t / lib * 1e4)
+    del X_t
     var = normed.var(dim=0)
+    del normed
     n = min(n_hvg, var.numel())
     top_vals, top_idx = torch.topk(var, n)
-    # Sort selected indices by descending variance
     sorted_order = torch.argsort(top_vals, descending=True)
-    return top_idx[sorted_order].cpu().numpy()
+    return top_idx[sorted_order].numpy()
 
 
 def _normalize(X: np.ndarray, filtered_idx: np.ndarray,

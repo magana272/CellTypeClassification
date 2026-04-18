@@ -44,9 +44,6 @@ H5AD_SOURCES: dict[str, str] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Synchronous streaming download (figshare / GEO)
-# ---------------------------------------------------------------------------
 
 def download_url(url: str, dest: str) -> None:
     """Stream *url* to *dest* with a progress bar.  Handles redirects."""
@@ -97,9 +94,6 @@ def download_h5ad(url: str, dest: str) -> None:
         os.replace(tmp, dest)
 
 
-# ---------------------------------------------------------------------------
-# Async parallel range-request download (Allen Brain S3)
-# ---------------------------------------------------------------------------
 
 async def _content_length(session: aiohttp.ClientSession, url: str) -> int:
     if not url.startswith(("http://", "https://")):
@@ -218,9 +212,6 @@ async def _download_allen_brain_async(root: str = "data") -> None:
             )
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
 def download_data(root: str = "data") -> None:
     """Download Allen Brain CSV datasets (async parallel)."""

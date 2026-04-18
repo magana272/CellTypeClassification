@@ -113,10 +113,6 @@ def get_model(
     )
 
 
-# ---------------------------------------------------------------------------
-# Per-model training config registry
-# ---------------------------------------------------------------------------
-
 TRAIN_CONFIGS: dict[str, TrainConfig] = {
     'CellTypeMLP': _mlp_tc,
     'CellTypeCNN': _cnn_tc,

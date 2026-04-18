@@ -18,9 +18,6 @@ _DEFAULT_GMT_URL = ('https://data.broadinstitute.org/gsea-msigdb/msigdb/'
                     'release/2023.2.Hs/c2.cp.reactome.v2023.2.Hs.symbols.gmt')
 
 
-# ---------------------------------------------------------------------------
-# PathwayMaskBuilder — encapsulates GMT parsing and mask construction
-# ---------------------------------------------------------------------------
 
 class PathwayMaskBuilder:
     """Downloads GMT files and builds (n_genes, n_pathways) binary masks."""
@@ -107,55 +104,6 @@ class PathwayMaskBuilder:
 
 
 # Backward-compat module-level wrappers
-
-def _parse_gmt(path: str, max_gene_set_size: int = 300) -> dict[str, list[str]]:
-    return PathwayMaskBuilder(gmt_path=path, max_gene_set_size=max_gene_set_size).parse_gmt()
-
-
-def _select_pathways(
-    gmt: dict[str, list[str]], gene_set: set[str],
-    min_overlap: int = 5, max_pathways: int = 300,
-) -> list[tuple[str, list[str]]]:
-    builder = PathwayMaskBuilder(min_overlap=min_overlap, max_pathways=max_pathways)
-    # Inject pre-parsed gmt so we don't re-read from disk
-    kept: list[tuple[str, list[str]]] = []
-    for name, genes in gmt.items():
-        overlap = [g for g in genes if g in gene_set]
-        if len(overlap) >= min_overlap:
-            kept.append((name, overlap))
-    kept.sort(key=lambda x: len(x[1]), reverse=True)
-    return kept[:max_pathways]
-
-
-def download_gmt(path: str, url: str) -> bool:
-    return PathwayMaskBuilder(gmt_path=path, gmt_url=url).download_gmt()
-
-
-def _pathways_to_mask(
-    kept: list[tuple[str, list[str]]], gene_names: Sequence[str],
-) -> torch.Tensor:
-    return PathwayMaskBuilder._pathways_to_mask(kept, gene_names)
-
-
-def build_pathway_mask(
-    gene_names: Sequence[str],
-    gmt_path: str = 'data/reactome.gmt',
-    gmt_url: str = _DEFAULT_GMT_URL,
-    min_overlap: int = 5,
-    max_pathways: int = 300,
-    max_gene_set_size: int = 300,
-) -> tuple[torch.Tensor, int]:
-    """Build a (n_genes, n_pathways) binary mask from Reactome pathways."""
-    builder = PathwayMaskBuilder(
-        gmt_path=gmt_path, gmt_url=gmt_url, min_overlap=min_overlap,
-        max_pathways=max_pathways, max_gene_set_size=max_gene_set_size,
-    )
-    return builder.build_mask(gene_names)
-
-
-# ---------------------------------------------------------------------------
-# Model classes
-# ---------------------------------------------------------------------------
 
 class MaskedEmbedding(nn.Module):
 

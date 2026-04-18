@@ -24,7 +24,8 @@ from sklearn.preprocessing import label_binarize
 
 from allen_brain.models import train as T
 from allen_brain.cell_data.cell_dataset import make_dataset
-from allen_brain.models.CellTypeGNN import build_graph_data
+from allen_brain.models.CellTypeGNN import GraphBuilder
+from allen_brain.models.gnn_train import _collect_graph_probabilities
 
 DATA_DIR: str = 'data/10x'
 SAVE_DIR: str = 'figures'
@@ -57,14 +58,14 @@ def _load_and_predict(
             with open(kw_path) as f:
                 kw_data: dict[str, Any] = json.load(f)
             k = kw_data.get('k_neighbors', 15)
-        data = build_graph_data(DATA_DIR, k_neighbors=k).to(T.DEVICE)
+        data = GraphBuilder(k_neighbors=k).build_graph_data(DATA_DIR).to(T.DEVICE)
         n_features: int = data.x.shape[1]
         n_classes: int = int(data.y.max().item()) + 1
         model: torch.nn.Module = T.build_model(model_cls_name, n_features, n_classes, **saved_kw)
         model.load_state_dict(torch.load(ckpt, map_location=T.DEVICE, weights_only=True))
         y_probs: np.ndarray
         y_true: np.ndarray
-        y_probs, y_true = T._collect_graph_probabilities(model, data, data.test_mask)
+        y_probs, y_true = _collect_graph_probabilities(model, data, data.test_mask)
         y_pred: np.ndarray = y_probs.argmax(1)
         class_names: list[str] = list(np.load(f'{DATA_DIR}/class_names.npy', allow_pickle=True))
     else:

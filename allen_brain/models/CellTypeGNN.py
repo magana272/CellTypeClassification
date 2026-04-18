@@ -13,9 +13,6 @@ from torch_geometric.nn import SAGEConv
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# GraphBuilder — encapsulates graph construction utilities
-# ---------------------------------------------------------------------------
 
 class GraphBuilder:
     """Builds PyG ``Data`` objects for GNN training and evaluation."""
@@ -151,39 +148,6 @@ class GraphBuilder:
         return w / w.sum() * n_classes
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat module-level wrappers
-# ---------------------------------------------------------------------------
-
-def load_combined_xy(data_dir: str) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
-    return GraphBuilder().load_combined_xy(data_dir)
-
-def build_masks(sizes: dict[str, int]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    return GraphBuilder.build_masks(sizes)
-
-def build_knn_edges(X_all: np.ndarray, k: int) -> torch.Tensor:
-    return GraphBuilder.build_knn_edges(X_all, k)
-
-def build_graph_data(
-    data_dir: str, k_neighbors: int = 15, normalize: str | None = None,
-) -> Data:
-    return GraphBuilder(k_neighbors=k_neighbors, normalize=normalize).build_graph_data(data_dir)
-
-def build_eval_graph(
-    X: np.ndarray, y: np.ndarray, k_neighbors: int = 15,
-) -> Data:
-    return GraphBuilder.build_eval_graph(X, y, k_neighbors)
-
-def masked_class_weights(
-    y: torch.Tensor, mask: torch.Tensor, n_classes: int,
-    device: torch.device | None = None,
-) -> torch.Tensor:
-    return GraphBuilder.masked_class_weights(y, mask, n_classes, device)
-
-
-# ---------------------------------------------------------------------------
-# Model classes
-# ---------------------------------------------------------------------------
 
 class ResidualSAGEBlock(nn.Module):
     """SAGEConv with LayerNorm, GELU, and a residual projection."""
@@ -245,9 +209,6 @@ class CellTypeGNN(nn.Module):
         return F.gelu(self.conv_out(x, edge_index))
 
 
-# ---------------------------------------------------------------------------
-# Training configuration (used by registry in __init__.py)
-# ---------------------------------------------------------------------------
 
 from typing import Any
 

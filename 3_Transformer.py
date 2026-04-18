@@ -1,6 +1,6 @@
 from allen_brain.models import train as T
 from allen_brain.models.config import ExperimentConfig
-from allen_brain.models.CellTypeAttention import build_pathway_mask
+from allen_brain.models.CellTypeAttention import PathwayMaskBuilder
 from allen_brain.cell_data.cell_dataset import make_dataset
 
 DATA_DIR = 'data/10x'
@@ -28,10 +28,10 @@ cfg = ExperimentConfig(
 def _build_pathway_kwargs() -> dict:
     """Build extra_model_kwargs for TOSICA from training gene names."""
     ds = make_dataset(DATA_DIR, split='train')
-    mask, n_pathways = build_pathway_mask(
-        [str(g) for g in ds.gene_names],
+    mask, n_pathways = PathwayMaskBuilder(
         gmt_path=GMT_PATH, min_overlap=MIN_PATHWAY_OVERLAP,
-        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE)
+        max_pathways=MAX_PATHWAYS, max_gene_set_size=MAX_GENE_SET_SIZE
+    ).build_mask([str(g) for g in ds.gene_names])
     return dict(mask=mask, n_pathways=n_pathways)
 
 

@@ -11,14 +11,7 @@ from rich.panel import Panel
 
 from allen_brain.cell_data.cell_dataset import make_dataset
 from allen_brain.cell_data.cell_load import ALL_DATASETS
-from allen_brain.cell_data.cell_vis import (
-    plot_class_distribution,
-    plot_cv2,
-    plot_heatmap,
-    plot_pca,
-    plot_umap,
-    plot_violin,
-)
+from allen_brain.cell_data.cell_vis import DatasetVisualizer
 
 SEED = 42
 console = Console()
@@ -43,43 +36,37 @@ def run_visualizations(data_dir: str, tag: str):
 
     gene_names = train_ds.gene_names
     fig_dir = "figures"
+    vis = DatasetVisualizer(train_ds, fig_dir=fig_dir, seed=SEED)
 
-    plot_class_distribution(
-        train_ds,
+    vis.plot_class_distribution(
         save_path=os.path.join(fig_dir, f"{tag}_class_distribution.png"),
     )
 
-    pca, X_pca = plot_pca(
-        train_ds,
-        seed=SEED,
+    pca, X_pca = vis.plot_pca(
         n_components=20,
         save_path=fig_dir,
         file_name=f"{tag}_pca.png",
     )
 
-    plot_umap(
-        train_ds,
+    vis.plot_umap(
         X_pca,
         max_cells=6000,
         save_path=os.path.join(fig_dir, f"{tag}_umap.png"),
     )
 
-    plot_heatmap(
-        train_ds,
+    vis.plot_heatmap(
         gene_names=gene_names,
         n_genes=20,
         save_path=os.path.join(fig_dir, f"{tag}_heatmap.png"),
     )
 
-    plot_violin(
-        train_ds,
+    vis.plot_violin(
         gene_names=gene_names,
         top_n=6,
         save_path=os.path.join(fig_dir, f"{tag}_violin.png"),
     )
 
-    plot_cv2(
-        train_ds,
+    vis.plot_cv2(
         gene_names=gene_names,
         n_top=1000,
         save_path=os.path.join(fig_dir, f"{tag}_cv2.png"),

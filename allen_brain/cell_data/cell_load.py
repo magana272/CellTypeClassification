@@ -16,9 +16,6 @@ from sklearn.preprocessing import LabelEncoder
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Typed dataset configuration (replaces raw dicts)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class DatasetConfig:
@@ -51,9 +48,6 @@ DEFAULT_SMARTSEQ_PATHS = {
 MIN_CELLS_PER_CLASS = 200
 TRAIN_FRAC, VAL_FRAC, TEST_FRAC = 0.80, 0.10, 0.10
 
-# ---------------------------------------------------------------------------
-# Dataset registry — every dataset the project knows about
-# ---------------------------------------------------------------------------
 ALL_DATASETS: dict[str, DatasetConfig] = {
     '10x':          DatasetConfig(dir='data/10x',          loader='csv'),
     'smartseq':     DatasetConfig(dir='data/smartseq',     loader='csv'),
@@ -182,9 +176,6 @@ def load_smartseq(seed: int = 42) -> str:
     return load_dataset(DEFAULT_SMARTSEQ_PATHS, seed)
 
 
-# ---------------------------------------------------------------------------
-# h5ad-based dataset loading (benchmark datasets)
-# ---------------------------------------------------------------------------
 
 def load_h5ad_dataset(
     h5ad_path: str,
