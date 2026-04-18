@@ -64,7 +64,7 @@ ALL_DATASETS: dict[str, DatasetConfig] = {
     'tabula_muris': DatasetConfig(dir='data/tabula_muris', loader='h5ad',
                                   label_col='cell_ontology_class', min_cells=100),
     'lung':         DatasetConfig(dir='data/lung',         loader='h5ad',
-                                  label_col='free_annotation',     min_cells=50),
+                                  label_col='cell_type',     min_cells=50),
 }
 
 CANONICAL_LABEL_MAP: dict[str, str] = {
