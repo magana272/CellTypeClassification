@@ -207,7 +207,7 @@ def _eval_graph_epoch(model, graph_data, device):
     return loss.item(), acc
 
 
-def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='Celltype',
+def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='subclass_label',
               max_g=300, max_gs=300, mask_ratio=0.015, n_unannotated=1, batch_size=8,
               embed_dim=48, depth=2, num_heads=4, lr=0.001, epochs=10, lrf=0.01,
               model_type='TOSICA'):
@@ -391,8 +391,9 @@ def _instantiate_model(model_type, num_genes, num_classes, mask, embed_dim, dept
 def main():
 
     if not os.path.exists('data/10x/data.h5ad'):
-        sc.read_csv('data/10x/matrix.csv').write_h5ad('data/10x/data.h5ad')
-
+        adata = sc.read_csv('data/10x/matrix.csv')
+        meta = pd.read_csv('data/10x/metadata.csv', index_col=0)
+        adata.obs = meta.loc[adata.obs_names]
     adata = sc.read_h5ad('data/10x/data.h5ad')
     models = ['TOSICA', 'my_TOSICA', 'MLP', 'GNN', 'CNN']
 
