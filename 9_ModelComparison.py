@@ -409,7 +409,7 @@ def main():
     #  Train all models 
     for model_name in models:
         print(f'\n=== Training {model_name} ===')
-        fit_model(adata, gmt_path='allen_brain/TOSICA/resources/reactome.gmt',
+        fit_model(adata, gmt_path='CellTypeClassification/allen_brain/TOSICA/resources/reactome.gmt',
                   project='TOSICA_comparison', model_type=model_name)
 
     #  Evaluate all models 
