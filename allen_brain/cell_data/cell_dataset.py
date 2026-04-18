@@ -84,7 +84,7 @@ def make_split_dataset(data_dir: str, split: str = 'train') -> GeneExpressionDat
 
     y_path = os.path.join(data_dir, f'y_{split}.npy')
     gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
-    class_names = np.load(os.path.join(data_dir, 'class_names.npy'), allow_pickle=True)
+    class_names = np.load(os.path.join(data_dir, 'class_names.npy'))
 
     le_path = os.path.join(data_dir, 'label_encoder.pkl')
     labelencoder = load_label_encoder(le_path)
