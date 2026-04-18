@@ -28,13 +28,7 @@ PROJECT ={
     "label_dictionary_path": 'TOSICA_comparison/label_dictionary.csv',
     "model_weight_path": 'TOSICA_comparison/{}-{}.pth',
 }
-MODELS = {
-    'TOSICA': original_TOSICA,
-    'my_TOSICA': my_implementation_TOSICA,
-    'MLP': MLP_Model,
-    'GNN': CellTypeGNN,
-    'CNN': CellTypeCNN
-}
+
 
 PRE_CONFIG = {
    'laten': False, 'save_att': 'X_att',
@@ -51,6 +45,7 @@ import sys
 
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.preprocessing import LabelEncoder
+from torch.fx import Transformer
 from TOSICA.TOSICA.pre import todense
 from TOSICA.TOSICA import set_seed
 from TOSICA.TOSICA.train import balance_populations
@@ -74,6 +69,13 @@ import pandas as pd
 import anndata as ad
 import scanpy as sc
 
+MODELS = {
+    'TOSICA': original_TOSICA,
+    'my_TOSICA': my_implementation_TOSICA,
+    'MLP': MLP_Model,
+    'GNN': CellTypeGNN, 
+    'CNN': CellTypeCNN
+}
 
 def split_dataset(adata, label_name='Celltype', train_ratio=0.7, val_ratio=0.15):
     """Split adata into train / val / test sets (default 70/15/15)."""
