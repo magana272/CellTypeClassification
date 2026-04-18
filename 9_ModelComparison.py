@@ -4,13 +4,14 @@ import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.preprocessing import LabelEncoder
 from torch.fx import Transformer
-from TOSICA.pre import todense
+from TOSICA import train
+from TOSICA import TOSICA_model
 from TOSICA.train import balance_populations, set_seed
 from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOSICA
 from allen_brain.models.CellTypeCNN import CellTypeCNN
 from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
 from allen_brain.models.CellTypeMLP import MLP_Model
-from TOSICA.model import Transformer as original_TOSICA
+from TOSICA import TOSICA_model
 from TOSICA.train import read_gmt, create_pathway_mask, get_gmt, MyDataSet, create_model
 import torch
 import torch.nn.functional as F
@@ -72,7 +73,7 @@ DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
 MODELS = {
-    'TOSICA': original_TOSICA,
+    'TOSICA': TOSICA_model.Transformer,
     'my_TOSICA': my_implementation_TOSICA,
     'MLP': MLP_Model,
     'GNN': CellTypeGNN, 
@@ -388,7 +389,7 @@ def _instantiate_model(model_type, num_genes, num_classes, mask, embed_dim, dept
 def main():
 
     if not os.path.exists('data/10x/data.h5ad'):
-        sc.read_csv('data/10x/data.csv', index_col=0).to_h5ad('data/10x/data.h5ad')
+        sc.read_csv('data/10x/matrix.csv').to_h5ad('data/10x/data.h5ad')
 
     adata = sc.read_h5ad('data/10x/data.h5ad')
     models = ['TOSICA', 'my_TOSICA', 'MLP', 'GNN', 'CNN']
