@@ -231,7 +231,7 @@ def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='subclas
     set_seed(CONFIG['seed'])
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     today = time.strftime('%Y%m%d', time.localtime(time.time()))
-    project = project or gmt_path.replace('.gmt', '') + '_%s' % today
+    project = project or gmt_path.replace('.gmt', '') + '_%s' % today + '_' + model_type
     project_path = os.getcwd() + '/%s' % project
     if not os.path.exists(project_path):
         os.makedirs(project_path)
