@@ -390,7 +390,7 @@ def _instantiate_model(model_type, num_genes, num_classes, mask, embed_dim, dept
 def main():
 
     if not os.path.exists('data/10x/data.h5ad'):
-        sc.read_csv('data/10x/matrix.csv').to_h5ad('data/10x/data.h5ad')
+        sc.read_csv('data/10x/matrix.csv').write_h5ad('data/10x/data.h5ad')
 
     adata = sc.read_h5ad('data/10x/data.h5ad')
     models = ['TOSICA', 'my_TOSICA', 'MLP', 'GNN', 'CNN']
