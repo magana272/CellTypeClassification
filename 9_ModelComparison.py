@@ -43,7 +43,7 @@ CONFIG = {
     'max_gs': 300,
     'mask_ratio': 0.015,
     'n_unannotated': 1,
-    'batch_size': 4096,
+    'batch_size': 10_000,
     'embed_dim': 48,
     'depth': 2,
     'num_heads': 4,
