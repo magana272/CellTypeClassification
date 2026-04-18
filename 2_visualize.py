@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from allen_brain.cell_data.cell_dataset import make_dataset
+from allen_brain.cell_data.cell_load import ALL_DATASETS
 from allen_brain.cell_data.cell_vis import (
     plot_class_distribution,
     plot_cv2,
@@ -22,10 +23,7 @@ from allen_brain.cell_data.cell_vis import (
 SEED = 42
 console = Console()
 
-DATASETS = [
-    ("data/10x",      "10x"),
-    ("data/smartseq", "smartseq"),
-]
+DATASETS = [(info['dir'], name) for name, info in ALL_DATASETS.items()]
 
 
 def run_visualizations(data_dir: str, tag: str):
@@ -35,7 +33,6 @@ def run_visualizations(data_dir: str, tag: str):
         title="Dataset", border_style="cyan", expand=False,
     ))
 
-    # Try split first, fall back to full matrix
     train_ds = make_dataset(data_dir, split="train")
     if train_ds is None:
         console.print(f"  [yellow]No train split found for {tag}[/yellow], loading full matrix ...")
@@ -47,13 +44,11 @@ def run_visualizations(data_dir: str, tag: str):
     gene_names = train_ds.gene_names
     fig_dir = "figures"
 
-    # 1. Class distribution
     plot_class_distribution(
         train_ds,
         save_path=os.path.join(fig_dir, f"{tag}_class_distribution.png"),
     )
 
-    # 2. PCA
     pca, X_pca = plot_pca(
         train_ds,
         seed=SEED,
@@ -62,7 +57,6 @@ def run_visualizations(data_dir: str, tag: str):
         file_name=f"{tag}_pca.png",
     )
 
-    # 3. UMAP (on PCA-reduced data)
     plot_umap(
         train_ds,
         X_pca,
@@ -70,7 +64,6 @@ def run_visualizations(data_dir: str, tag: str):
         save_path=os.path.join(fig_dir, f"{tag}_umap.png"),
     )
 
-    # 4. Heatmap
     plot_heatmap(
         train_ds,
         gene_names=gene_names,
@@ -78,7 +71,6 @@ def run_visualizations(data_dir: str, tag: str):
         save_path=os.path.join(fig_dir, f"{tag}_heatmap.png"),
     )
 
-    # 5. Violin
     plot_violin(
         train_ds,
         gene_names=gene_names,
@@ -86,7 +78,6 @@ def run_visualizations(data_dir: str, tag: str):
         save_path=os.path.join(fig_dir, f"{tag}_violin.png"),
     )
 
-    # 6. CV^2 plot
     plot_cv2(
         train_ds,
         gene_names=gene_names,

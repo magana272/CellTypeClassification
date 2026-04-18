@@ -13,10 +13,11 @@ Usage:
 import torch
 import numpy as np
 
-from .CellTypeMLP import MLP_Model
-from .CellTypeCNN import CellTypeCNN, ResBlock
-from .CellTypeAttention import TOSICA, MaskedEmbedding
-from .CellTypeGNN import CellTypeGNN
+from .config import TrainConfig
+from .CellTypeMLP import MLP_Model, TRAIN_CONFIG as _mlp_tc
+from .CellTypeCNN import CellTypeCNN, ResBlock, TRAIN_CONFIG as _cnn_tc
+from .CellTypeAttention import TOSICA, MaskedEmbedding, TRAIN_CONFIG as _tosica_tc
+from .CellTypeGNN import CellTypeGNN, TRAIN_CONFIG as _gnn_tc
 
 __all__ = [
     "CellTypeCNN",
@@ -110,3 +111,20 @@ def get_model(
     raise ValueError(
         f"Unknown model '{name}'. Choose from: {AVAILABLE_MODELS}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-model training config registry
+# ---------------------------------------------------------------------------
+
+TRAIN_CONFIGS: dict[str, TrainConfig] = {
+    'CellTypeMLP': _mlp_tc,
+    'CellTypeCNN': _cnn_tc,
+    'CellTypeTOSICA': _tosica_tc,
+    'CellTypeGNN': _gnn_tc,
+}
+
+
+def get_train_config(name: str) -> TrainConfig | None:
+    """Look up model-specific training config by name."""
+    return TRAIN_CONFIGS.get(name)

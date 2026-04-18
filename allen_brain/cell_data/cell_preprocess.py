@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import numpy as np
+import scipy.sparse
 import torch
 from rich.console import Console
 from sklearn.preprocessing import StandardScaler
@@ -7,12 +10,14 @@ _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 console = Console()
 
 
-def _gene_filter(X_val: np.ndarray, min_gene_frac: float) -> np.ndarray:
+def _gene_filter(X_val: np.ndarray | scipy.sparse.spmatrix, min_gene_frac: float) -> np.ndarray:
     """Keep genes expressed (>0) in at least max(3, frac * n_val) val cells.
 
     Runs on GPU when available; returns a numpy index array.
     """
-    min_cells = max(3, int(min_gene_frac * len(X_val)))
+    min_cells = max(3, int(min_gene_frac * X_val.shape[0]))
+    if scipy.sparse.issparse(X_val):
+        X_val = np.asarray(X_val.todense())
     X_t = torch.as_tensor(np.asarray(X_val), device=_DEVICE)
     nonzero = (X_t > 0).sum(dim=0)
     keep = torch.nonzero(nonzero >= min_cells, as_tuple=False).squeeze(1)
@@ -21,11 +26,13 @@ def _gene_filter(X_val: np.ndarray, min_gene_frac: float) -> np.ndarray:
     return keep.cpu().numpy()
 
 
-def select_hvg(X_val_filtered: np.ndarray, n_hvg: int) -> np.ndarray:
+def select_hvg(X_val_filtered: np.ndarray | scipy.sparse.spmatrix, n_hvg: int) -> np.ndarray:
     """Top-variance genes from log-normalized data, sorted by descending variance.
 
     Runs on GPU when available; returns a numpy index array.
     """
+    if scipy.sparse.issparse(X_val_filtered):
+        X_val_filtered = np.asarray(X_val_filtered.todense())
     X_t = torch.tensor(np.array(X_val_filtered, copy=True), dtype=torch.float64, device=_DEVICE)
     lib = X_t.sum(dim=1, keepdim=True).clamp(min=1.0)
     normed = torch.log1p(X_t / lib * 1e4).float()
@@ -88,7 +95,11 @@ def preprocess_hvg(
     return X_train, X_val, X_test, gene_names[hvg_gene_idx], scaler
 
 
-def align_genes(X_source, gene_names_source, gene_names_target):
+def align_genes(
+    X_source: np.ndarray,
+    gene_names_source: np.ndarray,
+    gene_names_target: np.ndarray,
+) -> tuple[np.ndarray, int]:
     """Reindex X_source columns to match gene_names_target order.
 
     Genes in target but missing from source get zero-filled.

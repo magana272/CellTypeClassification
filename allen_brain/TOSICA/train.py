@@ -50,6 +50,7 @@ class MyDataSet(Dataset):
         return self.len
 
 def balance_populations(data):
+    print('Balancing populations...')
     ct_names = np.unique(data[:,-1])
     ct_counts = pd.value_counts(data[:,-1])
     max_val = min(ct_counts.max(),np.int32(2000000/len(ct_counts)))

@@ -1,5 +1,7 @@
 """Loss functions for cell-type classification."""
 
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,14 +13,19 @@ class FocalLoss(nn.Module):
     FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
     """
 
-    def __init__(self, weight=None, gamma=2.0, label_smoothing=0.0,
-                 reduction='mean'):
+    def __init__(
+        self,
+        weight: torch.Tensor | None = None,
+        gamma: float = 2.0,
+        label_smoothing: float = 0.0,
+        reduction: str = 'mean',
+    ) -> None:
         super().__init__()
         self.gamma = gamma
         self.reduction = reduction
         self.register_buffer('weight', weight)
 
-    def forward(self, logits, targets):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         ce = F.cross_entropy(logits, targets, weight=self.weight,
                              reduction='none')
         pt = torch.exp(-ce)
@@ -31,20 +38,13 @@ class FocalLoss(nn.Module):
         return focal
 
 
-def build_criterion(loss_name, weight=None, label_smoothing=0.0, gamma=2.0):
-    """Factory for loss functions.
-
-    Parameters
-    ----------
-    loss_name : str
-        "cross_entropy" or "focal"
-    weight : Tensor, optional
-        Class weights.
-    label_smoothing : float
-        Label smoothing (cross_entropy only).
-    gamma : float
-        Focusing parameter (focal only).
-    """
+def build_criterion(
+    loss_name: str,
+    weight: torch.Tensor | None = None,
+    label_smoothing: float = 0.0,
+    gamma: float = 2.0,
+) -> nn.Module:
+    """Factory for loss functions."""
     if loss_name == 'cross_entropy':
         return nn.CrossEntropyLoss(weight=weight,
                                    label_smoothing=label_smoothing)

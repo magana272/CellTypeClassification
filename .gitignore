@@ -10,6 +10,5 @@ __pycache__
 *.pt
 /data/*
 /logs/*
-**/figures/*
 **/runs/*
 .DS_Store

@@ -1,12 +1,14 @@
 """Model comparison: AUC curves, accuracy bar charts, confusion matrices, per-class F1."""
+from __future__ import annotations
 
 import os
+from typing import Any
 
 import numpy as np
 from rich.console import Console
 from rich.panel import Panel
 
-console = Console()
+console: Console = Console()
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
@@ -24,11 +26,11 @@ from allen_brain.models import train as T
 from allen_brain.cell_data.cell_dataset import make_dataset
 from allen_brain.models.CellTypeGNN import build_graph_data
 
-DATA_DIR = 'data/10x'
-SAVE_DIR = 'figures'
-BATCH_SIZE = 1024
+DATA_DIR: str = 'data/10x'
+SAVE_DIR: str = 'figures'
+BATCH_SIZE: int = 1024
 
-MODELS = {
+MODELS: dict[str, tuple[str, bool, bool]] = {
     'MLP': ('CellTypeMLP', True, False),
     'CNN': ('CellTypeCNN', False, False),
     'Transformer': ('CellTypeTOSICA', True, False),
@@ -36,45 +38,51 @@ MODELS = {
 }
 
 
-def _load_and_predict(model_cls_name, squeeze_channel, is_graph):
+def _load_and_predict(
+    model_cls_name: str,
+    squeeze_channel: bool,
+    is_graph: bool,
+) -> dict[str, Any] | None:
     """Load best checkpoint and collect probabilities + predictions on test set."""
-    ckpt = T.find_best_ckpt(model_cls_name)
+    ckpt: str | None = T.find_best_ckpt(model_cls_name)
     if ckpt is None:
         return None
-    saved_kw = T._load_model_kwargs(ckpt, model_name=model_cls_name)
+    saved_kw: dict[str, Any] = T._load_model_kwargs(ckpt, model_name=model_cls_name)
 
     if is_graph:
-        kw_path = os.path.join(os.path.dirname(ckpt), 'model_kwargs.json')
-        k = 15
+        kw_path: str = os.path.join(os.path.dirname(ckpt), 'model_kwargs.json')
+        k: int = 15
         if os.path.exists(kw_path):
             import json
             with open(kw_path) as f:
-                kw_data = json.load(f)
+                kw_data: dict[str, Any] = json.load(f)
             k = kw_data.get('k_neighbors', 15)
         data = build_graph_data(DATA_DIR, k_neighbors=k).to(T.DEVICE)
-        n_features = data.x.shape[1]
-        n_classes = int(data.y.max().item()) + 1
-        model = T.build_model(model_cls_name, n_features, n_classes, **saved_kw)
+        n_features: int = data.x.shape[1]
+        n_classes: int = int(data.y.max().item()) + 1
+        model: torch.nn.Module = T.build_model(model_cls_name, n_features, n_classes, **saved_kw)
         model.load_state_dict(torch.load(ckpt, map_location=T.DEVICE, weights_only=True))
+        y_probs: np.ndarray
+        y_true: np.ndarray
         y_probs, y_true = T._collect_graph_probabilities(model, data, data.test_mask)
-        y_pred = y_probs.argmax(1)
-        class_names = list(np.load(f'{DATA_DIR}/class_names.npy', allow_pickle=True))
+        y_pred: np.ndarray = y_probs.argmax(1)
+        class_names: list[str] = list(np.load(f'{DATA_DIR}/class_names.npy', allow_pickle=True))
     else:
         ds_test = make_dataset(DATA_DIR, split='test')
-        hvg_path = os.path.join(os.path.dirname(ckpt), 'hvg_indices.npy')
+        hvg_path: str = os.path.join(os.path.dirname(ckpt), 'hvg_indices.npy')
         if os.path.exists(hvg_path):
-            hvg_idx = np.load(hvg_path)
+            hvg_idx: np.ndarray = np.load(hvg_path)
             ds_test.X = np.asarray(ds_test.X[:, hvg_idx])
             ds_test.gene_names = ds_test.gene_names[hvg_idx]
         # Apply same normalization used during training
         import pickle as _pickle
-        _normalize = None
-        _norm_path = os.path.join(os.path.dirname(ckpt), 'normalize.txt')
+        _normalize: str | None = None
+        _norm_path: str = os.path.join(os.path.dirname(ckpt), 'normalize.txt')
         if os.path.exists(_norm_path):
             with open(_norm_path) as _f:
                 _normalize = _f.read().strip() or None
-        _scaler = None
-        _scaler_path = os.path.join(os.path.dirname(ckpt), 'scaler.pkl')
+        _scaler: Any = None
+        _scaler_path: str = os.path.join(os.path.dirname(ckpt), 'scaler.pkl')
         if os.path.exists(_scaler_path):
             with open(_scaler_path, 'rb') as _f:
                 _scaler = _pickle.load(_f)
@@ -84,8 +92,8 @@ def _load_and_predict(model_cls_name, squeeze_channel, is_graph):
         n_features = len(ds_test.gene_names)
         model = T.build_model(model_cls_name, n_features, ds_test.n_classes, **saved_kw)
         model.load_state_dict(torch.load(ckpt, map_location=T.DEVICE, weights_only=True))
-        pin = T.DEVICE.type == 'cuda'
-        loader = DataLoader(ds_test, batch_size=BATCH_SIZE, shuffle=False, pin_memory=pin)
+        pin: bool = T.DEVICE.type == 'cuda'
+        loader: DataLoader[Any] = DataLoader(ds_test, batch_size=BATCH_SIZE, shuffle=False, pin_memory=pin)
         y_probs, y_true = T._collect_probabilities(model, loader, squeeze_channel)
         y_pred = y_probs.argmax(1)
         class_names = list(ds_test.class_names)
@@ -94,11 +102,11 @@ def _load_and_predict(model_cls_name, squeeze_channel, is_graph):
                 class_names=class_names, n_classes=len(class_names))
 
 
-def _collect_all():
-    results = {}
+def _collect_all() -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
     for name, (cls_name, squeeze, is_graph) in MODELS.items():
         console.print(f'Loading [bold]{name}[/bold]...')
-        r = _load_and_predict(cls_name, squeeze, is_graph)
+        r: dict[str, Any] | None = _load_and_predict(cls_name, squeeze, is_graph)
         if r is not None:
             results[name] = r
             console.print(f'  [green]{name}[/green]: {len(r["y_true"])} test samples')
@@ -107,23 +115,25 @@ def _collect_all():
     return results
 
 
-def plot_roc_per_model(results, save_dir):
+def plot_roc_per_model(results: dict[str, dict[str, Any]], save_dir: str) -> None:
     """2x2 grid of per-class ROC curves, one subplot per model."""
-    n = len(results)
+    n: int = len(results)
     if n == 0:
         return
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     axes = axes.flatten()
     for idx, (name, r) in enumerate(results.items()):
         ax = axes[idx]
-        n_classes = r['n_classes']
-        y_bin = label_binarize(r['y_true'], classes=range(n_classes))
+        n_classes: int = r['n_classes']
+        y_bin: np.ndarray = label_binarize(r['y_true'], classes=range(n_classes))
         for c in range(n_classes):
+            fpr: np.ndarray
+            tpr: np.ndarray
             fpr, tpr, _ = roc_curve(y_bin[:, c], r['y_probs'][:, c])
-            auc_val = roc_auc_score(y_bin[:, c], r['y_probs'][:, c])
+            auc_val: float = roc_auc_score(y_bin[:, c], r['y_probs'][:, c])
             ax.plot(fpr, tpr, alpha=0.5, label=f'{r["class_names"][c]} ({auc_val:.2f})')
         ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
-        macro_auc = roc_auc_score(y_bin, r['y_probs'], average='macro', multi_class='ovr')
+        macro_auc: float = roc_auc_score(y_bin, r['y_probs'], average='macro', multi_class='ovr')
         ax.set_title(f'{name} (macro AUC={macro_auc:.4f})')
         ax.set_xlabel('FPR')
         ax.set_ylabel('TPR')
@@ -136,20 +146,22 @@ def plot_roc_per_model(results, save_dir):
     console.print('[green]Saved[/green] roc_curves_all_models.png')
 
 
-def plot_roc_comparison(results, save_dir):
+def plot_roc_comparison(results: dict[str, dict[str, Any]], save_dir: str) -> None:
     """Single plot with macro-avg ROC per model overlaid."""
     fig, ax = plt.subplots(figsize=(8, 7))
     for name, r in results.items():
-        n_classes = r['n_classes']
-        y_bin = label_binarize(r['y_true'], classes=range(n_classes))
+        n_classes: int = r['n_classes']
+        y_bin: np.ndarray = label_binarize(r['y_true'], classes=range(n_classes))
         # Compute macro-average ROC
-        all_fpr = np.linspace(0, 1, 200)
-        mean_tpr = np.zeros_like(all_fpr)
+        all_fpr: np.ndarray = np.linspace(0, 1, 200)
+        mean_tpr: np.ndarray = np.zeros_like(all_fpr)
         for c in range(n_classes):
+            fpr: np.ndarray
+            tpr: np.ndarray
             fpr, tpr, _ = roc_curve(y_bin[:, c], r['y_probs'][:, c])
             mean_tpr += np.interp(all_fpr, fpr, tpr)
         mean_tpr /= n_classes
-        macro_auc = roc_auc_score(y_bin, r['y_probs'], average='macro', multi_class='ovr')
+        macro_auc: float = roc_auc_score(y_bin, r['y_probs'], average='macro', multi_class='ovr')
         ax.plot(all_fpr, mean_tpr, linewidth=2, label=f'{name} (AUC={macro_auc:.4f})')
     ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
     ax.set_xlabel('False Positive Rate')
@@ -162,18 +174,18 @@ def plot_roc_comparison(results, save_dir):
     console.print('[green]Saved[/green] roc_curves_comparison.png')
 
 
-def plot_accuracy_comparison(save_dir, csv_path='results.csv'):
+def plot_accuracy_comparison(save_dir: str, csv_path: str = 'results.csv') -> None:
     """Grouped bar chart of accuracy, F1-macro, F1-weighted from results.csv."""
     if not os.path.exists(csv_path):
         console.print(f'[yellow]{csv_path} not found[/yellow], skipping accuracy comparison plot')
         return
-    df = pd.read_csv(csv_path)
-    metrics = ['accuracy', 'f1_macro', 'f1_weighted']
-    available = [m for m in metrics if m in df.columns]
+    df: pd.DataFrame = pd.read_csv(csv_path)
+    metrics: list[str] = ['accuracy', 'f1_macro', 'f1_weighted']
+    available: list[str] = [m for m in metrics if m in df.columns]
     if not available:
         return
-    x = np.arange(len(df))
-    width = 0.25
+    x: np.ndarray = np.arange(len(df))
+    width: float = 0.25
     fig, ax = plt.subplots(figsize=(10, 6))
     for i, m in enumerate(available):
         ax.bar(x + i * width, df[m], width, label=m.replace('_', ' ').title())
@@ -189,16 +201,16 @@ def plot_accuracy_comparison(save_dir, csv_path='results.csv'):
     console.print('[green]Saved[/green] accuracy_comparison.png')
 
 
-def plot_confusion_matrices(results, save_dir):
+def plot_confusion_matrices(results: dict[str, dict[str, Any]], save_dir: str) -> None:
     """2x2 grid of confusion matrix heatmaps."""
-    n = len(results)
+    n: int = len(results)
     if n == 0:
         return
     fig, axes = plt.subplots(2, 2, figsize=(22, 20))
     axes = axes.flatten()
     for idx, (name, r) in enumerate(results.items()):
         ax = axes[idx]
-        cm = confusion_matrix(r['y_true'], r['y_pred'], normalize='true')
+        cm: np.ndarray = confusion_matrix(r['y_true'], r['y_pred'], normalize='true')
         sns.heatmap(cm, annot=False, cmap='Blues', vmin=0, vmax=1,
                     xticklabels=r['class_names'], yticklabels=r['class_names'],
                     ax=ax)
@@ -214,23 +226,23 @@ def plot_confusion_matrices(results, save_dir):
     console.print('[green]Saved[/green] confusion_matrices_comparison.png')
 
 
-def plot_per_class_f1(results, save_dir):
+def plot_per_class_f1(results: dict[str, dict[str, Any]], save_dir: str) -> None:
     """Grouped bar chart of per-class F1 across models."""
     if not results:
         return
-    first = next(iter(results.values()))
-    class_names = first['class_names']
-    n_classes = len(class_names)
-    model_names = list(results.keys())
-    f1_data = {}
+    first: dict[str, Any] = next(iter(results.values()))
+    class_names: list[str] = first['class_names']
+    n_classes: int = len(class_names)
+    model_names: list[str] = list(results.keys())
+    f1_data: dict[str, list[float]] = {}
     for name, r in results.items():
-        report = classification_report(r['y_true'], r['y_pred'],
+        report: dict[str, Any] = classification_report(r['y_true'], r['y_pred'],
                                        target_names=class_names,
                                        output_dict=True, zero_division=0)
         f1_data[name] = [report[cn]['f1-score'] for cn in class_names]
 
-    x = np.arange(n_classes)
-    width = 0.8 / len(model_names)
+    x: np.ndarray = np.arange(n_classes)
+    width: float = 0.8 / len(model_names)
     fig, ax = plt.subplots(figsize=(14, 6))
     for i, name in enumerate(model_names):
         ax.bar(x + i * width, f1_data[name], width, label=name)
@@ -246,13 +258,13 @@ def plot_per_class_f1(results, save_dir):
     console.print('[green]Saved[/green] per_class_f1_comparison.png')
 
 
-def plot_metrics_table(save_dir, csv_path='results.csv'):
+def plot_metrics_table(save_dir: str, csv_path: str = 'results.csv') -> None:
     """Render a metrics table as a figure."""
     if not os.path.exists(csv_path):
         return
-    df = pd.read_csv(csv_path)
+    df: pd.DataFrame = pd.read_csv(csv_path)
     # Round numeric columns
-    num_cols = df.select_dtypes(include=[np.number]).columns
+    num_cols: pd.Index = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].round(4)
     fig, ax = plt.subplots(figsize=(12, 2 + 0.5 * len(df)))
     ax.axis('off')
@@ -269,14 +281,14 @@ def plot_metrics_table(save_dir, csv_path='results.csv'):
     console.print('[green]Saved[/green] metrics_table.png')
 
 
-def main():
+def main() -> None:
     os.makedirs(SAVE_DIR, exist_ok=True)
     console.print(Panel(
         '[bold]MODEL COMPARISON[/bold]',
         border_style='cyan', expand=False,
     ))
 
-    results = _collect_all()
+    results: dict[str, dict[str, Any]] = _collect_all()
     if not results:
         console.print('[bold red]No trained models found.[/bold red] Run 4_*.py scripts first.')
         return
