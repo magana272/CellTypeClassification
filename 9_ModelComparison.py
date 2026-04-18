@@ -12,6 +12,7 @@ from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOS
 from allen_brain.models.CellTypeCNN import CellTypeCNN
 from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
 from allen_brain.models.CellTypeMLP import MLP_Model
+from allen_brain.TOSICA.train import todense
 # Torch imports
 import torch
 import torch.nn.functional as F
