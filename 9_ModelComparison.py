@@ -361,8 +361,8 @@ def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='subclas
         label_train_t = torch.as_tensor(label_train, dtype=torch.long).to(device)
         exp_val_t = torch.as_tensor(exp_val, dtype=torch.float32).to(device)
         label_val_t = torch.as_tensor(label_val, dtype=torch.long).to(device)
-        train_dataset = torch.utils.data.TensorDataset(exp_train_t, label_train_t)
-        val_dataset = torch.utils.data.TensorDataset(exp_val_t, label_val_t)
+        train_dataset = MyDataSet(exp_train_t, label_train_t)
+        val_dataset = MyDataSet(exp_val_t, label_val_t)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
                                                    shuffle=True, drop_last=True)
         valid_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size,
