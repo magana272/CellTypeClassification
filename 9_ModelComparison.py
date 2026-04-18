@@ -37,7 +37,7 @@ CONFIG = {
     'n_genes': 2000,
     'n_pathways': 200,
     'n_classes': 75,
-    'dropout': 0.1,
+    'dropout': 0.5,
     'hvg': 10_000,
     'max_g': 300,
     'max_gs': 300,
@@ -53,7 +53,7 @@ CONFIG = {
     'n_step': 10000
     
 }
-
+#label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=8, embed_dim=48,depth=2,num_heads=4,lr=0.001, epochs= 10, lrf=0.01):
 PROJECT ={
     'name': 'TOSICA_comparison',
     'model_types': ['TOSICA', 'my_TOSICA', 'MLP', 'GNN', 'CNN'],
@@ -356,9 +356,9 @@ def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='subclas
     else:
         train_dataset = MyDataSet(exp_train, label_train)
         val_dataset = MyDataSet(exp_val, label_val)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
-                                                   shuffle=True, pin_memory=True, drop_last=True)
-        valid_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size,
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers= os.cpu_count(),
+                                                   shuffle=True, pin_memory=True, drop_last=True, persistent_workers=True)
+        valid_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers= os.cpu_count(),persistent_workers=True,
                                                    shuffle=False, pin_memory=True, drop_last=True)
         for epoch in range(epochs):
             train_loss, train_acc = _train_epoch(model=model, optimizer=optimizer,
