@@ -1,3 +1,33 @@
+import math
+import sys
+import torch
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.preprocessing import LabelEncoder
+from torch.fx import Transformer
+from TOSICA.TOSICA.pre import todense
+from TOSICA.TOSICA import set_seed
+from TOSICA.TOSICA.train import balance_populations
+from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOSICA
+from allen_brain.models.CellTypeCNN import CellTypeCNN
+from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
+from allen_brain.models.CellTypeMLP import MLP_Model
+from TOSICA.TOSICA.TOSICA_model import Transformer as original_TOSICA
+from TOSICA.TOSICA.train import read_gmt, create_pathway_mask, get_gmt, MyDataSet, create_model
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.optim import lr_scheduler
+from torch.utils.tensorboard import SummaryWriter
+from torch_geometric.data import Data
+from tqdm import tqdm
+import time
+import os
+import numpy as np
+import pandas as pd
+import anndata as ad
+import scanpy as sc
+
+
 CONFIG = {
     'seed': 1,
     'n_genes': 2000,
@@ -40,34 +70,7 @@ PRE_CONFIG = {
 DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
-import math
-import sys
 
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from sklearn.preprocessing import LabelEncoder
-from torch.fx import Transformer
-from TOSICA.TOSICA.pre import todense
-from TOSICA.TOSICA import set_seed
-from TOSICA.TOSICA.train import balance_populations
-from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOSICA
-from allen_brain.models.CellTypeCNN import CellTypeCNN
-from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
-from allen_brain.models.CellTypeMLP import MLP_Model
-from TOSICA.TOSICA.TOSICA_model import Transformer as original_TOSICA
-from TOSICA.TOSICA.train import read_gmt, create_pathway_mask, get_gmt, MyDataSet, create_model
-import torch
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.optim import lr_scheduler
-from torch.utils.tensorboard import SummaryWriter
-from torch_geometric.data import Data
-from tqdm import tqdm
-import time
-import os
-import numpy as np
-import pandas as pd
-import anndata as ad
-import scanpy as sc
 
 MODELS = {
     'TOSICA': original_TOSICA,
