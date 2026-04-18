@@ -363,9 +363,9 @@ def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='subclas
         label_val_t = torch.as_tensor(label_val, dtype=torch.long).to(device)
         train_dataset = MyDataSet(exp_train_t, label_train_t)
         val_dataset = MyDataSet(exp_val_t, label_val_t)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=4,
                                                    shuffle=True, drop_last=True)
-        valid_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size,
+        valid_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=4,
                                                    shuffle=False, drop_last=True)
         for epoch in range(epochs):
             train_loss, train_acc = _train_epoch(model=model, optimizer=optimizer,
