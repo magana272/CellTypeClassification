@@ -85,36 +85,37 @@ MODELS = {
 def split_dataset(adata, label_name='subclass_label', train_ratio=0.7, val_ratio=0.15):
     """Split adata into train / val / test sets (default 70/15/15)."""
     label_encoder = LabelEncoder()
-    el_data = pd.DataFrame(
-        todense(adata),
-        index=np.array(adata.obs_names).tolist(),
-        columns=np.array(adata.var_names).tolist())
-    el_data[label_name] = adata.obs[label_name].astype('str')
-    genes = el_data.columns.values[:-1]
-    el_data = np.array(el_data)
-    el_data[:, -1] = label_encoder.fit_transform(el_data[:, -1])
-    inverse = label_encoder.inverse_transform(range(0, int(np.max(el_data[:, -1])) + 1))
-    el_data = el_data.astype(np.float32)
+    genes = np.array(adata.var_names)
+
+    labels = label_encoder.fit_transform(adata.obs[label_name].astype('str').values)
+    inverse = label_encoder.inverse_transform(range(labels.max() + 1))
+
+    X = np.asarray(todense(adata), dtype=np.float32)
+
+    # Append labels as last column for balance_populations
+    el_data = np.column_stack([X, labels.astype(np.float32)])
+    del X
     el_data = balance_populations(data=el_data)
 
-    n_genes = len(el_data[0]) - 1
+    n_genes = el_data.shape[1] - 1
     n = len(el_data)
     n_train = int(n * train_ratio)
     n_val = int(n * val_ratio)
-    print (f"Total samples: {n}, genes: {n_genes}, classes: {len(inverse)}")
-    train_data, val_data, test_data = torch.utils.data.random_split(
-        el_data, [n_train, n_val, n - n_train - n_val])
-    print(f"Train samples: {len(train_data)}, Val samples: {len(val_data)}, Test samples: {len(test_data)}")
-    train_arr = np.array(train_data)
-    val_arr = np.array(val_data)
-    test_arr = np.array(test_data)
+    print(f"Total samples: {n}, genes: {n_genes}, classes: {len(inverse)}")
 
-    exp_train = torch.from_numpy(train_arr[:, :n_genes].astype(np.float32))
-    label_train = torch.from_numpy(train_arr[:, -1].astype(np.int64))
-    exp_val = torch.from_numpy(val_arr[:, :n_genes].astype(np.float32))
-    label_val = torch.from_numpy(val_arr[:, -1].astype(np.int64))
-    exp_test = torch.from_numpy(test_arr[:, :n_genes].astype(np.float32))
-    label_test = torch.from_numpy(test_arr[:, -1].astype(np.int64))
+    # Shuffle indices instead of copying data through random_split
+    indices = np.random.permutation(n)
+    train_idx = indices[:n_train]
+    val_idx = indices[n_train:n_train + n_val]
+    test_idx = indices[n_train + n_val:]
+    print(f"Train samples: {len(train_idx)}, Val samples: {len(val_idx)}, Test samples: {len(test_idx)}")
+
+    exp_train = torch.from_numpy(el_data[train_idx, :n_genes])
+    label_train = torch.from_numpy(el_data[train_idx, -1].astype(np.int64))
+    exp_val = torch.from_numpy(el_data[val_idx, :n_genes])
+    label_val = torch.from_numpy(el_data[val_idx, -1].astype(np.int64))
+    exp_test = torch.from_numpy(el_data[test_idx, :n_genes])
+    label_test = torch.from_numpy(el_data[test_idx, -1].astype(np.int64))
 
     return exp_train, label_train, exp_val, label_val, exp_test, label_test, inverse, genes
 
