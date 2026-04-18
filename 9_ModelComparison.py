@@ -4,15 +4,14 @@ import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.preprocessing import LabelEncoder
 from torch.fx import Transformer
-from TOSICA.TOSICA.pre import todense
-from TOSICA.TOSICA import set_seed
-from TOSICA.TOSICA.train import balance_populations
+from TOSICA.pre import todense
+from TOSICA.train import balance_populations, set_seed
 from allen_brain.models.CellTypeAttention import TOSICA as my_implementation_TOSICA
 from allen_brain.models.CellTypeCNN import CellTypeCNN
 from allen_brain.models.CellTypeGNN import CellTypeGNN, build_knn_edges
 from allen_brain.models.CellTypeMLP import MLP_Model
-from TOSICA.TOSICA.TOSICA_model import Transformer as original_TOSICA
-from TOSICA.TOSICA.train import read_gmt, create_pathway_mask, get_gmt, MyDataSet, create_model
+from TOSICA.model import Transformer as original_TOSICA
+from TOSICA.train import read_gmt, create_pathway_mask, get_gmt, MyDataSet, create_model
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
